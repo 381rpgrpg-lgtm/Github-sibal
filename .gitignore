@@ -1,1 +1,6 @@
 diag-out/
+login*.json
+out.bin
+*.bin
+packs.json
+content.json
