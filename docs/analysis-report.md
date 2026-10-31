@@ -1,0 +1,68 @@
+# Drift Girls Reborn APK 분석 및 재구성 보고서
+
+- 대상: `DriftGirlsReborn.apk` (1,092,509 bytes, sha256 `d413274c…6859`. 서버 `/android/version.json`의 값과 일치)
+- 도구: apktool 2.12.1, jadx 1.5.3, curl (앱 User-Agent 사용)
+- 한계: 이 환경에는 KVM이 없어 Android 에뮬레이터를 실행하지 못했습니다. 따라서 **실제 크래시는 재현하지 못했습니다.** 아래 내용은 정적 분석과 서버 응답 확인에 근거합니다.
+
+## 1. 확인된 사실
+
+| 항목 | 값 |
+|---|---|
+| 패키지 / 버전 | `com.driftgirlsreborn.app` 1.0.4 (versionCode 5), classes.dex 빌드 일시 2026-10-20 |
+| SDK | minSdk 24, targetSdk 35, compileSdk 35 |
+| 네이티브 라이브러리 | 없음 (`lib/` 없음). 32/64비트 문제와 16KB 페이지 문제는 해당 없음 |
+| 권한 | INTERNET, ACCESS_NETWORK_STATE, REQUEST_INSTALL_PACKAGES. 저장소 권한 없음 |
+| 네트워크 | HTTPS 전용 (`usesCleartextTraffic=false`) |
+| 저장 위치 | `filesDir/client`(게임 클라이언트 캐시), `filesDir/packs`(추가 데이터 `.dgp`). 앱 전용 저장소 |
+| 화면 구성 | Activity 1개에 WebView 2개. 게임 WebView는 `https://game.driftgirlsreborn.com/`를 로드하고, 오버레이 WebView는 `appassets.androidplatform.net/shell/`에서 로딩·팝업 UI를 그림 |
+| 게임 | Vite 번들(난독화), three.js r170, WebGL2 |
+| 서버 상태 (2026-10-31) | `/` 200, `/api/client` 200 (build `be2b9e4…`, 파일 253개, 52.7MB. 과거 빌드 포함), `/android/version.json` 200. 앱 UA가 아니면 `launcher_only`로 거부 |
+| 추가 데이터 | JS가 `DGAndroid.syncPacks(manifest)`를 호출 → `PackStore`가 `/a/<…>/pack/<id>.dgp`를 이어받기와 SHA-256 검증을 하며 받음 → `shouldInterceptRequest`로 Range 응답 제공. 매니페스트가 세션(로그인)에 묶여 있어 용량은 확인하지 못함 |
+
+**결론:** 이 APK는 "옛 targetSdk 앱이 최신 Android에서 깨지는" 경우가 아닙니다. targetSdk 35, scoped storage, HTTPS, 64비트 등 최신 기준을 이미 충족합니다. 그러므로 원인은 **WebView 위에서 WebGL을 실행하는 구조 자체**에 있을 가능성이 높습니다.
+
+## 2. 크래시 원인 분석
+
+### 2-1. 앱 스스로 이미 인지하고 있는 원인 (코드로 확인)
+- `CrashGuard`와 호환 모드 팝업 문구: *"The game closed by itself several times on this phone (its graphics driver)"*
+- `Diag.noteExitReasons()`는 `ApplicationExitInfo`의 `crash_native` 톰스톤(signal, faultAddr, frames)을 수집해 `/android/diag`로 전송합니다.
+- 서버의 1.0.4 릴리스 노트: *"a Compatibility mode for phones whose graphics driver crashes"*
+
+즉 관찰된 증상은 **앱 프로세스 전체가 네이티브 크래시로 종료되는 것**이고, 주된 의심 대상은 GPU 드라이버입니다. `onRenderProcessGone`(렌더러만 죽는 경우)은 이미 복구 처리가 되어 있습니다.
+
+### 2-2. 원인 가설 (추론이며 검증 필요)
+1. **WebView의 GPU 작업은 앱 프로세스 안에서 실행됨.** Chrome은 GPU 프로세스가 따로 있어서 드라이버가 죽어도 `webglcontextlost`로 끝납니다. WebView는 같은 크래시가 앱 전체를 종료시킬 수 있습니다. 동일 콘텐츠가 Chrome에서는 되고 WebView에서만 실패하는 2026년 7월 보고(Pixel 8, Android 16, WebView 150/152)도 있습니다. 다만 이 보고에서 근본 원인은 밝혀지지 않았습니다.
+2. **GPU 부하 요인 (엔진 코드로 확인됨)**
+   - WebGL 컨텍스트가 2개 존재: 메인 렌더러(`powerPreference:'high-performance'`)와 보조 렌더러(`alpha:true`, `preserveDrawingBuffer:true`). `preserveDrawingBuffer:true`는 모바일 타일 GPU에서 메모리와 대역폭을 크게 늘립니다.
+   - 오버레이 WebView까지 합치면 GPU를 쓰는 표면이 3개입니다.
+3. **추가 다운로드가 Activity의 일반 Thread(`dg-packs`)에서 실행됨.** 앱이 백그라운드로 가면 Android 14 이상의 cached-app freezer나 LMK에 의해 중단될 수 있습니다. `Diag.exitReason`에 `freezer`(14)가 등록되어 있는 것도 이를 뒷받침합니다. `.part` 파일로 이어받기는 되지만 최초 다운로드 체감 품질이 떨어집니다.
+4. 부수적인 문제
+   - `ClientCache.STATIC` 정규식이 하위 폴더(`static/reborn-ui/*.png`)를 허용하지 않아 이 파일들은 오프라인 캐시에서 빠집니다.
+   - 오버레이 렌더러가 죽으면 게임 WebView까지 함께 재시작됩니다.
+
+※ `PackStore`의 Range 응답이 스트림을 0에서 시작하는 것은 버그가 아닙니다. WebView가 요청 시작 오프셋만큼 `skip()`을 호출하기 때문입니다.
+
+## 3. 재구성 방안
+
+### 0단계: 실측 (가장 먼저 할 일)
+- 서버의 `/android/diag` 수집 로그에서 `reason`, `signal`, `frames`의 최상위 라이브러리(`libGLES_mali`, `vulkan.*`, `libwebviewchromium` 등), 그리고 기기·Android·WebView 버전 분포를 집계합니다.
+- 또는 문제가 생기는 기기에서 `adb logcat -b crash`와 `adb bugreport`를 수집합니다.
+- 이 결과에 따라 아래 1단계의 A, B, C 중 무엇을 할지 정해집니다.
+
+### 1단계: 원인별 대응
+| 원인 | 대응 | 비용 |
+|---|---|---|
+| A. GPU 드라이버 네이티브 크래시 | (1) 게임 Activity를 `android:process=":game"`으로 분리해서, 셸 프로세스가 살아남아 재시작·호환 모드를 안내하게 함 (2) 보조 렌더러의 `preserveDrawingBuffer` 제거 또는 필요할 때만 생성, 동시 WebGL 컨텍스트를 1개로 축소, 모바일 DPR 상한 설정 (3) 그래도 해결되지 않으면 런타임 교체(아래 대안) | 낮음~중간 |
+| B. 렌더러 OOM (`crash=false`, `low_memory`) | 텍스처 KTX2/Basis 압축(엔진에 로더 존재), 해상도 단계 조정, 씬 전환 시 해제 | 중간 |
+| C. 다운로드 중 중단 (`freezer`, 백그라운드 종료) | `PackStore`를 WorkManager로 이전하고 장시간 작업 시 foreground service(`dataSync`)로 실행. Android 13 이상은 `POST_NOTIFICATIONS` 요청, 14 이상은 `foregroundServiceType` 선언 필요 | 중간 |
+
+### 런타임 교체 대안 (A가 해결되지 않을 때)
+- **TWA (Chrome)**: GPU 프로세스가 분리되어 있습니다. 하지만 `DGAndroid` 브리지와 `shouldInterceptRequest`를 쓸 수 없으므로 팩과 캐시를 Service Worker와 OPFS/Cache Storage로 옮겨야 하고, 서버의 UA 차단도 조정해야 합니다. Chrome 설치가 전제입니다.
+- **GeckoView**: Android에서 GPU 프로세스를 지원합니다(Firefox 100 이후 릴리스에 탑재). APK가 수십 MB 늘어나며, 브리지는 WebExtension 메시징으로 재작성해야 합니다.
+
+### 배포
+- 지금은 사이드로드 배포를 유지하면 됩니다. 셸이 이미 Play 기술 기준(targetSdk 35, HTTPS, 앱 전용 저장소)에 거의 맞습니다.
+- 나중에 Play로 갈 경우의 차이:
+  - 자체 업데이터(`ShellUpdater` + `REQUEST_INSTALL_PACKAGES`)는 Play 정책상 제거해야 합니다.
+  - AAB로 빌드해야 하고, 그 시점의 targetSdk 요구치(매년 8월 상향)를 맞춰야 합니다.
+  - 서명 키는 지금 키를 계속 유지하세요. 키가 바뀌면 기존 사용자는 업데이트가 아니라 재설치를 해야 합니다.
