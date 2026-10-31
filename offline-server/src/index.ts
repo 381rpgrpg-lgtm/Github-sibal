@@ -1,6 +1,7 @@
 // 로컬 권위 서버 진입점. HTTP 라우팅만 (WebSocket /api/pvp 는 실시간 단계에서 추가).
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync, createReadStream, statSync } from 'node:fs';
+import { join, normalize } from 'node:path';
 import { SqliteStore } from './db.js';
 import { Auth } from './auth.js';
 import { loadGameData } from './content.js';
@@ -8,6 +9,29 @@ import { dispatch, type Ctx } from './rpc.js';
 import './handlers/boot.js';
 
 const cfg = JSON.parse(readFileSync(new URL('../config.json', import.meta.url), 'utf8'));
+const CLIENT_DIR = new URL('../data/client/', import.meta.url).pathname;
+
+const MIME: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript',
+  '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm',
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp',
+  '.svg': 'image/svg+xml', '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf',
+};
+
+// 평문 웹 클라이언트 서빙 (data/client/). 사용자가 scripts/fetch-client.mjs 로 채운다.
+function serveClient(res: ServerResponse, relPath: string): boolean {
+  const rel = relPath === '/' ? 'index.html' : normalize(relPath).replace(/^(\.\.(\/|\\|$))+/, '').replace(/^\//, '');
+  const file = join(CLIENT_DIR, rel);
+  if (!file.startsWith(CLIENT_DIR) || !existsSync(file) || !statSync(file).isFile()) return false;
+  const ext = file.slice(file.lastIndexOf('.'));
+  res.writeHead(200, {
+    'content-type': MIME[ext] ?? 'application/octet-stream',
+    'cache-control': 'no-store',
+    'access-control-allow-origin': '*',
+  });
+  createReadStream(file).pipe(res);
+  return true;
+}
 const store = new SqliteStore(new URL('../data/state.db', import.meta.url).pathname);
 const auth = new Auth(!!cfg.strictSignatures);
 const data = loadGameData();
@@ -53,6 +77,18 @@ const server = createServer(async (req, res) => {
         account: { id: session.accountId, Charname: body.login ?? 'Player' },
       });
     }
+    // api/client 매니페스트: data/client/api-client.json 그대로
+    if (path === '/api/client' && method === 'GET') {
+      const mf = join(CLIENT_DIR, 'api-client.json');
+      if (existsSync(mf)) return json(res, 200, JSON.parse(readFileSync(mf, 'utf8')));
+      return json(res, 503, { error: 'client_not_fetched' });
+    }
+    // 웹 클라이언트 정적 파일 (/, /static/*, /favicon 등). 인증 불필요.
+    if (method === 'GET' && (path === '/' || path.startsWith('/static/') || path === '/index.html')) {
+      if (serveClient(res, path)) return;
+      return json(res, 503, { error: 'client_not_fetched', hint: 'run: node scripts/fetch-client.mjs' });
+    }
+
     if (path === '/api/content' && method === 'GET') return json(res, 200, data.content);
     if (path === '/api/scripts' && method === 'GET') {
       const jp = url.searchParams.get('lang') === 'jp';

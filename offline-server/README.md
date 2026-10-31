@@ -47,3 +47,6 @@ npm run build && npm start      # 또는 npm run dev
 - `strictSignatures`: `false`(오프라인 기본). `true` 로 바꾸면 `x-dg-s` HMAC 검증(원격 분리용).
 - `cheat`: 서버측 치트 토글. 라이브 서버가 아닌 **로컬 서버에만** 적용되므로 타 플레이어 영향 없음.
 - `upstream`: `scripts/fetch-data.mjs` 전용. 서버 런타임은 upstream 을 호출하지 않는다.
+
+## 클라이언트 연결 (상세)
+`tools/repoint-apk.sh` 로 APK를 로컬 서버로 재지정한다. `tools/README.md` 참고.
