@@ -1,0 +1,14 @@
+{
+  "port": 8080,
+  "upstream": "https://game.driftgirlsreborn.com",
+  "strictSignatures": false,
+  "cheat": {
+    "enabled": true,
+    "maxCurrency": false,
+    "unlockAllCars": false,
+    "unlockAllGirls": false,
+    "forceWinBattles": false,
+    "instantFamiliarity": false
+  },
+  "note": "upstream is used ONLY by scripts/fetch-data.mjs to pull plaintext content/scripts with your own login. The server itself never calls upstream."
+}

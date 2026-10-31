@@ -1,0 +1,24 @@
+{
+  "name": "driftgirls-offline-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local authoritative server for Drift Girls Reborn (offline + cheat). Boot~main stage.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "fetch-data": "node scripts/fetch-data.mjs"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.10.0",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.10.5",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}
