@@ -4,3 +4,4 @@ out.bin
 *.bin
 packs.json
 content.json
+repoint-out/
