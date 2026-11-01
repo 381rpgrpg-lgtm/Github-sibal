@@ -16,7 +16,10 @@
 - [x] `/sw.js` 자체 작성 통과형 서비스워커(원본 미사용), 평문 에셋 모드에서 `/api/packs` 빈 목록
 - [x] 평문 에셋 `/a/local/**` → `data/assets/**`, 테이블 `/a/local/data/*.json` → `data/tables/*`
 - [x] `/api/rpc` 디스패처 + `MsgLoginReq` → `[MsgLoginAns, MsgUserData]`, `MsgSetOptionReq`, `MsgUpdateCompletionReq`
-- [ ] 메인 화면 조작 메시지 (차량·상점·데이트 …) — 2단계
+- [x] 메인 허브 주기 메시지, 우편함 조회·수령, 코스메틱 확인, 출석보상 1일 1회
+- [x] 튜토리얼 첫 캐릭터 선택(`MsgFirstSelectReq`), 동승 변경(`MsgSelectPassengerReq`), 캐릭터 메모리(`MsgUpdateGirlMemoryReq`)
+- [x] 스토리 레이스 시작·결과(`MsgBattleStartReq`/`MsgBattleResultReq`): 연료, 보상, 레벨, 숙련도, 친밀도, 다음 레이스 해금
+- [ ] 차량 강화·상점 구매·가챠·데이트 등 나머지 메시지 — 진행 중
 - [ ] `MsgCheatReq` 전체 토글 — 2단계
 - [ ] `/api/pvp` WebSocket (실시간 레이스) — 4단계
 - [x] 에셋 서빙 — 사용자 제공 평문(`data/assets/`, `data/tables/`)
@@ -50,9 +53,21 @@ npm run build && npm start      # 또는 npm run dev
 
 메인 화면이 **그려지려면 에셋이 필요**하다(위 2). 에셋 없이도 서버 API 계약은 위 curl 검증대로 동작한다.
 
+## 기록 모드 (개발용)
+로컬에 아직 없는 메시지를 **본인 계정으로 실서버에 보내고** 요청/응답을 `data/recorded/` 에 저장한다. 이 기록을 근거로 로컬 처리를 구현한다.
+```
+DG_RECORD=1 DG_LOGIN=<id> DG_PASSWORD=<pw> npm start
+```
+- 자격증명은 환경변수로만 받으며 저장소에 남기지 않는다. 구현된 메시지는 실서버로 보내지 않는다.
+- 실서버 계정 상태가 실제로 바뀐다(레이스 진행 등).
+
 ## 설정 `config.json`
 - `strictSignatures`: `false`(오프라인 기본). `true` 로 바꾸면 `x-dg-s` HMAC 검증(원격 분리용).
 - `cheat`: 서버측 치트 토글. 라이브 서버가 아닌 **로컬 서버에만** 적용되므로 타 플레이어 영향 없음.
+  - `forceWinBattles`: 레이스 시작 응답의 `ForceWin` 을 켜고 결과를 승리로 처리 (검증 완료)
+  - `infiniteFuel`: 레이스 시작 시 연료를 차감하지 않음
+  - `maxCurrency`: 로그인 시 PropertySet 숫자값 최대화 (나머지 토글은 미구현)
+- `showNotices`: 로그인마다 뜨는 이벤트 공지 팝업 표시 여부 (기본 false)
 - `upstream`: `scripts/fetch-data.mjs` 전용. 서버 런타임은 upstream 을 호출하지 않는다.
 
 ## 클라이언트 연결 (상세)

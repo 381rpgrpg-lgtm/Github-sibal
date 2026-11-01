@@ -6,10 +6,12 @@ import { SqliteStore } from './db.js';
 import { Auth, signResponse, type Session } from './auth.js';
 import { loadGameData } from './content.js';
 import { dispatch, type Ctx } from './rpc.js';
+import { Upstream } from './upstream.js';
 import './handlers/boot.js';
 import './handlers/main.js';
 import './handlers/mail.js';
 import './handlers/girls.js';
+import './handlers/battle.js';
 
 const cfg = JSON.parse(readFileSync(new URL('../config.json', import.meta.url), 'utf8'));
 const CLIENT_DIR = new URL('../data/client/', import.meta.url).pathname;
@@ -47,6 +49,8 @@ function serveClient(res: ServerResponse, relPath: string, root = CLIENT_DIR): b
 const store = new SqliteStore(new URL('../data/state.db', import.meta.url).pathname);
 const auth = new Auth(!!cfg.strictSignatures);
 const data = loadGameData();
+const upstream = Upstream.fromEnv(cfg.upstream);
+if (upstream) console.log('[record] 기록 모드 ON: 미구현 RPC 는 실서버로 보내고 data/recorded/ 에 저장');
 
 type SignCtx = { session: Session; nonce: string } | null;
 
@@ -160,7 +164,7 @@ const server = createServer(async (req, res) => {
 
     if (path === '/api/rpc' && method === 'POST') {
       const { name, body: msgBody } = JSON.parse(body || '{}');
-      const ctx: Ctx = { store, data, session, cheat: cfg.cheat, showNotices: !!cfg.showNotices };
+      const ctx: Ctx = { store, data, session, cheat: cfg.cheat, showNotices: !!cfg.showNotices, upstream };
       const result = await dispatch(String(name), msgBody ?? {}, ctx);
       return reply(200, result);
     }

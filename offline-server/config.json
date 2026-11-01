@@ -5,6 +5,7 @@
   "cheat": {
     "enabled": true,
     "maxCurrency": false,
+    "infiniteFuel": false,
     "unlockAllCars": false,
     "unlockAllGirls": false,
     "forceWinBattles": false,
