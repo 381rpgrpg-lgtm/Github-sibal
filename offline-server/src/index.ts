@@ -10,6 +10,9 @@ import './handlers/boot.js';
 
 const cfg = JSON.parse(readFileSync(new URL('../config.json', import.meta.url), 'utf8'));
 const CLIENT_DIR = new URL('../data/client/', import.meta.url).pathname;
+const ASSET_DIR = new URL('../data/', import.meta.url).pathname; // data/assets/** (사용자가 제공한 평문 에셋)
+const ASSET_BASE = '/a/local/';
+const missLog = new Map<string, number>(); // 서빙 실패한 경로 (연결 검증용)
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript',
@@ -19,10 +22,10 @@ const MIME: Record<string, string> = {
 };
 
 // 평문 웹 클라이언트 서빙 (data/client/). 사용자가 scripts/fetch-client.mjs 로 채운다.
-function serveClient(res: ServerResponse, relPath: string): boolean {
+function serveClient(res: ServerResponse, relPath: string, root = CLIENT_DIR): boolean {
   const rel = relPath === '/' ? 'index.html' : normalize(relPath).replace(/^(\.\.(\/|\\|$))+/, '').replace(/^\//, '');
-  const file = join(CLIENT_DIR, rel);
-  if (!file.startsWith(CLIENT_DIR) || !existsSync(file) || !statSync(file).isFile()) return false;
+  const file = join(root, rel);
+  if (!file.startsWith(root) || !existsSync(file) || !statSync(file).isFile()) return false;
   const ext = file.slice(file.lastIndexOf('.'));
   res.writeHead(200, {
     'content-type': MIME[ext] ?? 'application/octet-stream',
@@ -71,7 +74,7 @@ const server = createServer(async (req, res) => {
         sigKey: session.sigKey,
         expires: session.expires,
         time: Math.floor(Date.now() / 1000),
-        assetBase: '/a/local/',
+        assetBase: ASSET_BASE,
         packs: data.packs ? 'local' : 'none',
         content: data.content?.version ?? 'local',
         account: { id: session.accountId, Charname: body.login ?? 'Player' },
@@ -82,6 +85,16 @@ const server = createServer(async (req, res) => {
       const mf = join(CLIENT_DIR, 'api-client.json');
       if (existsSync(mf)) return json(res, 200, JSON.parse(readFileSync(mf, 'utf8')));
       return json(res, 503, { error: 'client_not_fetched' });
+    }
+    // 평문 에셋: <base href>=/a/local/ 기준 상대경로 요청 → data/<경로>
+    if (method === 'GET' && path.startsWith(ASSET_BASE)) {
+      const rel = decodeURIComponent(path.slice(ASSET_BASE.length));
+      if (serveClient(res, '/' + rel, ASSET_DIR)) return;
+      missLog.set(rel, (missLog.get(rel) ?? 0) + 1);
+      return json(res, 404, { error: 'asset_missing', path: rel });
+    }
+    if (method === 'GET' && path === '/__offline/misses') {
+      return json(res, 200, Object.fromEntries([...missLog].sort((a, b) => b[1] - a[1])));
     }
     // 웹 클라이언트 정적 파일 (/, /static/*, /favicon 등). 인증 불필요.
     if (method === 'GET' && (path === '/' || path.startsWith('/static/') || path === '/index.html')) {
