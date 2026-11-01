@@ -9,6 +9,7 @@ export interface Ctx {
   data: GameData;
   session: Session;
   cheat: Record<string, boolean>;
+  showNotices?: boolean;
 }
 
 export interface Msg {
@@ -32,5 +33,6 @@ export async function dispatch(name: string, body: any, ctx: Ctx): Promise<{ mes
     return { error: `unimplemented:${name}` };
   }
   const messages = await fn(body, ctx);
+  console.log(`[rpc] ${name} -> ${messages.map((m) => m.name).join(',') || '(none)'}`);
   return { messages };
 }

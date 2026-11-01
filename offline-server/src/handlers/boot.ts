@@ -48,8 +48,24 @@ function loadSnapshot(ctx: Ctx): any {
   return fresh;
 }
 
+// 출석 보상(Daygift): 하루 1회만 내려보낸다. 같은 날 재로그인 시 Daygift 를 생략.
+function dailyGift(snap: any, ctx: Ctx): void {
+  const today = new Date().toISOString().slice(0, 10);
+  const last = ctx.store.getMeta(`daygift:${ctx.session.accountId}`);
+  if (snap.Daygift && last === today) {
+    // 빈 Daygift 는 빈 '획득 아이템' 팝업을 띄운다 → 필드 자체를 뺀다(클라이언트 기본값=0).
+    delete snap.Daygift;
+  } else if (snap.Daygift) {
+    ctx.store.setMeta(`daygift:${ctx.session.accountId}`, today);
+  }
+}
+
 register('MsgLoginReq', (_body, ctx): Msg[] => {
-  const snap = applyCheat(loadSnapshot(ctx), ctx.cheat);
+  const base = loadSnapshot(ctx);
+  dailyGift(base, ctx);
+  // 이벤트 공지 팝업(로그인마다 재표시)은 오프라인 기본값에서 끈다. config.showNotices=true 로 켬.
+  if (!ctx.showNotices && base.NoticeInfo) base.NoticeInfo = { ...base.NoticeInfo, Notice: [] };
+  const snap = applyCheat(base, ctx.cheat);
   return [
     { name: 'MsgLoginAns', body: { Seq: 1, Result: 0, Accountid: ctx.session.accountId } },
     { name: 'MsgUserData', body: snap },
@@ -71,12 +87,16 @@ register('MsgUpdateCompletionReq', (body, ctx): Msg[] => {
   return [{ name: 'MsgUpdateCompletionAns', body: { Result: 0, Completion: snap.UserInfo?.Completion } }];
 });
 
-// 코스메틱 '확인함' 표시: 상태에 기록만 하고 응답 메시지는 없다(클라이언트는 결과를 쓰지 않음).
+// 코스메틱 '확인함' 표시: New=false 로 저장하고 갱신된 Cosmetics 를 돌려준다.
 register('MsgCosmeticSeenReq', (body, ctx): Msg[] => {
   const snap = ctx.store.getUser(ctx.session.accountId);
   if (snap && Array.isArray(body?.Ids)) {
-    snap.CosmeticSeen = Array.from(new Set([...(snap.CosmeticSeen ?? []), ...body.Ids]));
+    const ids = new Set(body.Ids.map(String));
+    for (const c of snap.Cosmetics?.Owned ?? []) if (ids.has(String(c.Id))) c.New = false;
+    if (snap.Cosmetics) snap.Cosmetics.Version = (snap.Cosmetics.Version ?? 0) + 1;
     ctx.store.putUser(ctx.session.accountId, snap);
+    // 클라이언트는 모든 응답 본문에 공통 patch 를 적용한다: Cosmetics.Owned 가 오면 상태를 교체.
+    return [{ name: 'MsgCosmeticSeenAns', body: { Result: 0, Cosmetics: snap.Cosmetics } }];
   }
   return [];
 });

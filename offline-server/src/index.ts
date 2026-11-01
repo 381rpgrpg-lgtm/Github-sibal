@@ -7,6 +7,8 @@ import { Auth, signResponse, type Session } from './auth.js';
 import { loadGameData } from './content.js';
 import { dispatch, type Ctx } from './rpc.js';
 import './handlers/boot.js';
+import './handlers/main.js';
+import './handlers/mail.js';
 
 const cfg = JSON.parse(readFileSync(new URL('../config.json', import.meta.url), 'utf8'));
 const CLIENT_DIR = new URL('../data/client/', import.meta.url).pathname;
@@ -157,7 +159,7 @@ const server = createServer(async (req, res) => {
 
     if (path === '/api/rpc' && method === 'POST') {
       const { name, body: msgBody } = JSON.parse(body || '{}');
-      const ctx: Ctx = { store, data, session, cheat: cfg.cheat };
+      const ctx: Ctx = { store, data, session, cheat: cfg.cheat, showNotices: !!cfg.showNotices };
       const result = await dispatch(String(name), msgBody ?? {}, ctx);
       return reply(200, result);
     }
