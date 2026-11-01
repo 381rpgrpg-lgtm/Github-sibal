@@ -1,6 +1,6 @@
 // 로컬 권위 서버 진입점. HTTP 라우팅만 (WebSocket /api/pvp 는 실시간 단계에서 추가).
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { readFileSync, existsSync, createReadStream, statSync } from 'node:fs';
+import { readFileSync, existsSync, createReadStream, statSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, normalize } from 'node:path';
 import { SqliteStore } from './db.js';
 import { Auth, signResponse, type Session } from './auth.js';
@@ -21,6 +21,11 @@ const ASSET_BASE = '/a/local/';
 const TABLE_DIR = new URL('../data/tables/', import.meta.url).pathname; // decrypted/data/*.json
 const missLog = new Map<string, number>(); // 서빙 실패한 경로 (연결 검증용)
 const PLAINTEXT_ASSETS = existsSync(join(ASSET_DIR, 'assets'));
+const DIAG_DIR = new URL('../data/diag/', import.meta.url).pathname;
+// 받아 둔 웹 클라이언트의 빌드 해시 (data/client/api-client.json)
+function clientBuild(): string | null {
+  try { return JSON.parse(readFileSync(join(CLIENT_DIR, 'api-client.json'), 'utf8')).build ?? null; } catch { return null; }
+}
 // 통과형 서비스워커: 설치 즉시 활성화하고 fetch 를 가로채지 않는다(모든 요청은 서버로 직행).
 const PASSTHROUGH_SW = `self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
@@ -91,6 +96,22 @@ const server = createServer(async (req, res) => {
     if (method === 'OPTIONS') return reply(204, {});
 
     // 공개(인증 불필요)
+    // 앱(APK) 부팅: ClientCache.prepare() 가 먼저 /api/version 의 build 를 확인하고, 없으면 "Cannot connect to server".
+    if (path === '/api/version' && method === 'GET') {
+      return reply(200, { build: clientBuild(), maintenance: null, time: Date.now() / 1000 });
+    }
+    // 앱 자체 업데이트 확인(ShellUpdater): 설치된 버전과 같은 값을 돌려줘 업데이트 안내가 뜨지 않게 한다.
+    if (path === '/android/version.json' && method === 'GET') {
+      return reply(200, { versionCode: 5, versionName: '1.0.4', minVersionCode: 4, apk: '', size: 0, sha256: '', notes: '' });
+    }
+    // 앱 진단 기록(Diag.send): 로컬에 저장만 한다(크래시 분석용).
+    if (path === '/android/diag' && method === 'POST') {
+      const body = await readBody(req);
+      mkdirSync(DIAG_DIR, { recursive: true });
+      writeFileSync(join(DIAG_DIR, `diag-${Date.now()}.json`), body);
+      console.log(`[diag] 앱 진단 기록 저장 (${body.length} bytes)`);
+      return reply(200, { ok: true });
+    }
     if (path === '/api/login' && method === 'POST') {
       const body = JSON.parse((await readBody(req)) || '{}');
       const { session } = auth.login(String(body.login ?? ''), String(body.password ?? ''));
