@@ -13,18 +13,21 @@ if (!login || !password) { console.error('사용: node scripts/fetch-data.mjs <l
 const b64url = (b) => Buffer.from(b).toString('base64').replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
 const b64urlDec = (s) => Buffer.from(String(s).replace(/-/g,'+').replace(/_/g,'/'),'base64');
 const DATA = new URL('../data/', import.meta.url).pathname;
+const UA = 'DriftGirlsReborn/1.0.4 (Android 14)'; // 실서버는 앱 UA 가 아니면 launcher_only 로 거부한다
 mkdirSync(DATA, { recursive: true });
 
 // 로그인 시 서버가 요구하는 빌드 해시: 현재 클라이언트 페이지에서 추출
 async function currentBuild() {
-  const html = await (await fetch(BASE + '/')).text();
-  // 서버가 build 를 내려주는 가장 확실한 경로: 잘못된 build 로 login 시 에러 바디에 담겨 옴
+  // 잘못된 build 로 login 하면 426 응답 바디의 build 필드에 현재 빌드 해시가 온다.
   const r = await fetch(BASE + '/api/login', {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-dg-build': 'probe' },
-    body: JSON.stringify({ login, password }),
+    headers: { 'content-type': 'application/json', 'x-dg-build': 'probe', 'user-agent': UA },
+    body: '{}',
   });
-  const j = await r.json().catch(() => ({}));
+  const text = await r.text();
+  let j = {};
+  try { j = JSON.parse(text); } catch {}
+  if (!j.build) console.error(`빌드 확인 응답: HTTP ${r.status} ${text.slice(0, 200)}`);
   return j.build || null;
 }
 
@@ -32,7 +35,7 @@ let session;
 async function doLogin(build) {
   const r = await fetch(BASE + '/api/login', {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-dg-build': build },
+    headers: { 'content-type': 'application/json', 'x-dg-build': build, 'user-agent': UA },
     body: JSON.stringify({ login, password }),
   });
   if (!r.ok) throw new Error('login HTTP ' + r.status + ' ' + (await r.text()));
@@ -51,7 +54,7 @@ async function signed(path, method = 'GET', bodyObj = null) {
       'content-type': 'application/json',
       'x-dg-build': session.build,
       authorization: 'Bearer ' + session.token,
-      'x-dg-c': nonce, 'x-dg-s': sig,
+      'x-dg-c': nonce, 'x-dg-s': sig, 'user-agent': UA,
     },
     body: method === 'GET' ? undefined : bodystr,
   });
