@@ -46,6 +46,11 @@ export function famLevel(girlId: number, fam: number): number {
   return Math.min(lv, 4);
 }
 
+/** 캐릭터 NextCoin = 친밀도 단계 x 100 (실기록: 단계 1 -> 100, 2 -> 200, 3 -> 300). 친밀도가 바뀔 때마다 맞춘다. */
+export function syncGirl(g: any) {
+  if (g && g.Girlid) g.NextCoin = 100 * famLevel(Number(g.Girlid), Number(g.Familiarity) || 0);
+}
+
 /** 탑승 캐릭터 능력치 보너스 (클라이언트 passengerBonus / GetPassengerNormalBonusAvailable).
  *  조건: 친밀도 단계 2 이상, Emotion 1·2(화남) 아님, 캐릭터 Rarity <= 차량 Grade.
  *  값: [0, Attr0..Attr3][단계] 를 GirlAttrTable[AttrBias] 비율로 나눠 버림 (Acc, Drift, MaxSpd, Stability 순). AttrType 2 는 x 차량 레벨. */

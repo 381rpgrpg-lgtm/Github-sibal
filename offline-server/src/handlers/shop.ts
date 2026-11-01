@@ -64,20 +64,7 @@ function kindOf(type: number): Kind {
   return 'unsupported'; // 부품 등
 }
 
-// 새 차량 레코드: 계정 스냅샷의 차량 필드 구성을 따르고 값은 cars.json 정의에서.
-function newCar(snap: any, cartype: number): any {
-  const d = carDefs!.get(cartype);
-  const carid = (snap.Cars?.CarInfo ?? []).reduce((m: number, c: any) => Math.max(m, Number(c.Carid) || 0), 0) + 1;
-  return {
-    Carid: carid, Cartype: cartype, ItemInfo: [], UpgradeLevel: 1, SlotNum: Number(d.SlotInit) || 1, Mastery: 0,
-    Price: Number(d.SellPrice) || 0, Attributes: { ...d.Attributes }, MasteryCapacity: Number(d.SoftLimit) || 40,
-    MasteryAttr: { AttribMaxSpd: 0, AttribAcc: 0, AttribStability: 0, AttribDrift: 0 },
-    FuelConsume: 20, FuelConsume20404: 13, NthGeneration: 1, IsExhibited: false,
-    ColorTable: d.ColorTable, ColorIndex: Number(d.ColorIndex) || 1, DecalIndex: -1, PlateName: '',
-    CoatingSkill: 0, CoatingValue: 0, CoatingCount: 0, CoatingTime: 0, CoatingCoin: 8000,
-    Grade: Number(d.Grade) || 1, CarName: '', IsLocked: false, ExpansionLevel: 0, CarExp: 0, DeltaMastery: 0,
-  };
-}
+const newCar = (snap: any, cartype: number) => newOwnedCar(snap, cartype); // gamecalc 공용 (연료 소모·이름 포함)
 
 const TIERS = ['common', 'rare', 'epic', 'legendary', 'ultra'];
 const PART_CATS = new Set([1, 2, 3, 4, 5, 6]);
@@ -214,6 +201,8 @@ register('MsgBuyProductReq', (body, ctx): Msg[] => {
     }
   });
   ctx.store.setMeta(limitKey, String(bought + 1));
+  // 추정: 첫 구매로 OpenStore 튜토리얼(32768) 완료 (실기록 71000 구매 응답에서 Completion |= 32768)
+  ui.Completion = Number(ui.Completion) | 32768;
   ctx.store.putUser(ctx.session.accountId, snap);
   return [{
     name: 'MsgBuyProductAns',

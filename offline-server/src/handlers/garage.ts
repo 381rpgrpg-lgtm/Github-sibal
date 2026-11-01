@@ -62,7 +62,7 @@ register('MsgUpgradeCarReq', (body, ctx): Msg[] => {
     return [{ name: 'MsgUpgradeCarAns', body: {
       Seq: 1, Result: R_OK, UpgradeSuccess: true, ResultCarInfo: { ...car, CarEffect: car.CarEffect ?? [] }, UserInfo: ui,
       RemovedCarInfo: [...ids].map((Carid) => ({ Carid })), RemovedPartsInfo: removedParts.map((p: any) => ({ Itemid: p.Itemid })),
-      NormalDeltaExp: pv.exp, BonusDeltaExp: 0, PropertySet: snap.PropertySet,
+      NormalDeltaExp: pv.exp, BonusDeltaExp: 0, // 재료 강화 응답에는 PropertySet 없음 (실기록)
     } }];
   }
   if (Number(ui.Completion) & TUT_REINFORCE_CAR) return fail('재료 없음 (튜토리얼 강화는 이미 완료)');

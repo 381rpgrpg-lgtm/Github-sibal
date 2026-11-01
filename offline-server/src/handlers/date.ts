@@ -31,7 +31,7 @@ const DATA = new URL('../../data/', import.meta.url).pathname;
 const TUT_DATE = 1024;
 const MULT: Record<number, number> = { 1: 0.5, 2: 0.75, 3: 1, 4: 1.25, 5: 1.5 };
 // 첫 장소 보너스: girlTable FirstDatePlaceBonus (20105·20101·20102 = 112, 20207 = 103). 실기록 두 건 모두 그 장소 첫 데이트.
-import { girlDef as gdef } from '../gamecalc.js';
+import { girlDef as gdef, table, syncGirl } from '../gamecalc.js';
 const COOLTIME_SEC = 30;
 
 interface Row { Id: number; ScriptName: string; FamiliarityLv: number; Step?: number; Function: string; TextTag?: string; Sound?: string;
@@ -67,7 +67,8 @@ const toIns = (r: Row, extra: any = {}) => {
   if (r.TextTag) o.TextTag = r.TextTag;
   if (r.Sound) o.Sound = r.Sound;
   const p = [r.Parameter1, r.Parameter2, r.Parameter3, r.Parameter4, r.Parameter5].filter((x) => x !== undefined && x !== null);
-  if (p.length) o.Parameter = p.map((x) => String(x).trim()); // 원본 데이터의 'face_boring ' 같은 공백 제거(실서버 응답은 공백 없음)
+  // 원본 데이터의 'face_boring ' 같은 공백: CHANGE 는 실서버 응답에서 제거돼 있고(Date_Park), FACE 는 그대로였다(Shopping_B)
+  if (p.length) o.Parameter = p.map((x) => (r.Function === 'CHANGE' ? String(x).trim() : String(x)));
   return { ...o, ...extra };
 };
 // 해당 단계 행이 없으면 더 낮은 단계 행을 쓴다(기록: 20105 단계 2 튜토리얼 데이트에 Date_Event_Chat_A 단계 1 행, 덩어리 표기는 2).
@@ -130,7 +131,8 @@ function chatChunk(girl: number, lv: number, fam: number, tutorial: boolean, qIn
 }
 
 interface DateState { girl: number; place: number; lv: number; tutorial: boolean; likes: number; dislikes: number;
-  chat: string | null; chatSat: number; resultIndex: number; finalIndex: number; satisfaction?: number; end?: string }
+  chat: string | null; chatSat: number; resultIndex: number; finalIndex: number; satisfaction?: number; end?: string;
+  dept?: { scripts: string[]; gift?: { index: number; count: number; delta: number } } }
 const key = (ctx: Ctx) => `date:${ctx.session.accountId}`;
 const getState = (ctx: Ctx): DateState | null => { const s = ctx.store.getMeta(key(ctx)); return s ? JSON.parse(s) : null; };
 const setState = (ctx: Ctx, s: DateState | null) => ctx.store.setMeta(key(ctx), s ? JSON.stringify(s) : '');
@@ -153,6 +155,7 @@ register('MsgDateStartReq', (body, ctx): Msg[] => {
   if (!snap) return fail('계정 없음');
   const g = myGirl(snap, body?.GirlInfo?.Girlid);
   if (!g) return fail('보유하지 않은 캐릭터');
+  if (Number(body?.DateType) === 3) return departmentStart(snap, g, ctx);
   const place = places!.get(Number(body?.DatePlace));
   if (!place) return fail(`장소 데이트가 아님 (DateType ${body?.DateType ?? '-'}: 백화점 등은 실서버 기록이 더 필요해 미구현)`);
   const ui = snap.UserInfo;
@@ -198,6 +201,7 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
   const place = places!.get(st.place);
   const ui = snap.UserInfo;
   const save = () => { setState(ctx, st); ctx.store.putUser(ctx.session.accountId, snap); };
+  if (st.dept) return departmentProgress(snap, g, st, body, head, ctx, save);
 
   // 채팅 이벤트 답 (튜토리얼은 Depth 0 Index 1, 일반은 Depth 1 Index 5)
   const isChat = st.tutorial ? index === 1 : depth === 1 && index === 5;
@@ -206,6 +210,7 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
     const a = ansRows[(Number(body?.AnswerSelect) || 1) - 1] ?? ansRows[ansRows.length - 1];
     const [grade, sname, fam] = [a?.Parameter1 ?? 'Pass', a?.Parameter2 ?? '', Number(a?.Parameter3) || 0];
     g.Familiarity = (Number(g.Familiarity) || 0) + fam;
+    syncGirl(g);
     st.chatSat = grade === 'Best' ? 2 : grade === 'Good' ? 1 : 0;
     save();
     return [{ name: 'MsgScriptProgressAns', body: { ...head, GirlInfo: g,
@@ -244,6 +249,7 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
     st.end ??= 'Date_End_Basic';
     (st as any).firstDate = (Number(g.NthDate) || 0) === 0;
     g.Familiarity = (Number(g.Familiarity) || 0) + delta + bonus;
+    syncGirl(g);
     g.SameDateCnt = Number(g.LastDatePlace) === st.place ? (Number(g.SameDateCnt) || 0) + 1 : 0;
     g.NthDate = (Number(g.NthDate) || 0) + 1;
     g.LastDatePlace = st.place;
@@ -311,3 +317,129 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
   console.warn(`[date] 처리하지 않은 진행 단계 ${JSON.stringify(body)}`);
   return [{ name: 'MsgScriptProgressAns', body: head }];
 });
+
+// ── 백화점 데이트 (DateType 3) ─────────────────────────────────────────────
+// 실기록 1건(2026-11-01, 20105 친밀도 630 단계 3, 첫 백화점 = 튜토리얼):
+//   시작 {Result 1, UserInfo, GirlInfo:{Girlid}} + 대본 [CHANGE ["40017", 캐릭터, "SYSTEM", "face_basic"], Date_Department 행, {SHOPLIST [캐릭터] Index 1}, {Index 2}]
+//     Completion 에 DepartmentStore(536870912) 비트, 코인 차감 없음.
+//   Index 1 AnswerSelect = 선물 비트 합 (클라이언트 ShopList FLAGS [0 아이쇼핑, 1, 2, 4, 8, 64]):
+//     64(선물 5 = 전용 드레스): 친밀도 + PresentFamiliarityRise5(600), ItemFlag |= 64, 캐릭터 아이템(girlItemTable 같은 캐릭터 Slot 10) 지급,
+//     GirlItemInfo [{ItemId, ItemType, StackNum 1}], SpecialDressSlot = ItemId, SpecialDressVisibleCheck true, AppearanceChanged true,
+//     대본 Date_Event_Shopping_B (CHANGE 3번째 인자 = 아이템, POPUP 행 Index 3). 튜토리얼이라 PresentPrice5(6890) 미차감.
+//   Depth 1 Index 3 -> {GiftForGirl {Girlid, GiftIndex 5, Count 1}, GirlInfo {Girlid, Familiarity, DeltaFamiliarity}}
+//   Index 2 -> DateResultAns {GirlInfo(DateCoolTime +30초), UserInfo, GgraphPatch [], CallScript [], UpdateGirlInfo [], GirlMemorySet}
+//     기억: Date_Department, Date_Event_Shopping_B (FmFlag 단계 비트), 아이템 {Id: 아이템, RewardState 1}
+// 추정(기록 없음): 선물 1~4 (가격 PresentPriceN 코인, 친밀도 합산, Shopping_A 대본, 아이템 없음), 아이쇼핑(0: EyeShoppingFamiliarity/XP,
+//   Date_Event_Eyeshopping), 튜토리얼 외 선물 5 가격 차감, 여러 선물 동시 구매 시 GiftIndex(가장 높은 번호)·Count(개수).
+const TUT_DEPARTMENT = 536870912;
+const DEPT_PLACE = '40017';
+const GIFT_FLAGS = [0, 1, 2, 4, 8, 64];
+
+function departmentStart(snap: any, g: any, ctx: Ctx): Msg[] {
+  const ui = snap.UserInfo;
+  const girl = Number(g.Girlid), lv = famLevel(g, Number(g.Familiarity) || 0);
+  const tutorial = !(Number(ui.Completion) & TUT_DEPARTMENT);
+  ui.Completion = Number(ui.Completion) | TUT_DEPARTMENT;
+  const ins = [{ Function: 'CHANGE', Parameter: [DEPT_PLACE, String(girl), 'SYSTEM', 'face_basic'] },
+    ...scriptRows(girl, 'Date_Department', lv).map((r) => toIns(r)),
+    { Function: 'SHOPLIST', Parameter: [String(girl)], Index: 1 }, { Index: 2 }];
+  setState(ctx, { girl, place: 0, lv, tutorial, likes: 0, dislikes: 0, chat: null, chatSat: 0, resultIndex: -1, finalIndex: 2,
+    dept: { scripts: ['Date_Department'] } });
+  ctx.store.putUser(ctx.session.accountId, snap);
+  return [
+    { name: 'MsgDateStartAns', body: { Seq: 1, Result: 1, UserInfo: ui, GirlInfo: { Girlid: girl } } },
+    { name: 'MsgLoadScript', body: { Seq: 2, Script: { Chunk: [chunk(girl, 'Date_Department', lv, ins)] } } },
+  ];
+}
+
+function departmentProgress(snap: any, g: any, st: DateState, body: any, head: any, ctx: Ctx, save: () => void): Msg[] {
+  const ui = snap.UserInfo;
+  const girl = st.girl, lv = st.lv;
+  const d = gdef(girl) ?? {};
+  const index = Number(body?.Index) || 0, depth = Number(body?.Depth) || 0;
+  if (depth === 0 && index === 1) {
+    const sel = Number(body?.AnswerSelect) || 0;
+    const picked = GIFT_FLAGS.map((f, i) => (i > 0 && sel & f ? i : 0)).filter(Boolean);
+    let delta = 0, xp = 0, name = 'Date_Event_Eyeshopping';
+    const items: any[] = [];
+    const extraGirl: any = {};
+    if (!picked.length) {
+      delta = Number(d.EyeShoppingFamiliarity) || 0; xp = Number(d.EyeShoppingXP) || 0;
+    } else {
+      const cost: Record<string, number> = { Coin: 0, Cash: 0, SocialPoint: 0 };
+      for (const i of picked) {
+        if (Number(g.ItemFlag) & GIFT_FLAGS[i]) continue; // 이미 산 선물
+        const unit = ['Coin', 'Cash', 'SocialPoint'][Number(d[`PresentPriceUnit${i}`]) || 0];
+        if (!(st.tutorial && i === 5)) cost[unit] += Number(d[`PresentPrice${i}`]) || 0;
+        delta += Number(d[`PresentFamiliarityRise${i}`]) || 0;
+      }
+      if ((Number(ui.Coin) || 0) < cost.Coin || (Number(ui.Cash) || 0) < cost.Cash || (Number(ui.SocialPoint) || 0) < cost.SocialPoint) {
+        console.warn(`[date] 백화점 선물 재화 부족 ${JSON.stringify(cost)}`);
+        return [{ name: 'MsgScriptProgressAns', body: { ...head, Result: 3, UserInfo: ui } }];
+      }
+      ui.Coin -= cost.Coin; ui.Cash -= cost.Cash; ui.SocialPoint = (Number(ui.SocialPoint) || 0) - cost.SocialPoint;
+      g.ItemFlag = picked.reduce((f, i) => f | GIFT_FLAGS[i], Number(g.ItemFlag) || 0);
+      name = picked.includes(5) ? 'Date_Event_Shopping_B' : 'Date_Event_Shopping_A';
+      if (picked.includes(5)) {
+        // 선물 5 = 그 캐릭터의 숨겨진 드레스 (Slot 10, Resource 'DR_hidden_*', 실기록 80511)
+        const dresses = (table('girlItemTable.json')?.GirlItemInfo ?? []).filter((x: any) => Number(x.GirlId) === girl && Number(x.Slot) === 10);
+        const dress = dresses.find((x: any) => /hidden/i.test(String(x.Resource))) ?? dresses[0];
+        if (dress) {
+          snap.GirlItems ??= { GirlItemInfo: [], Version: 1 };
+          const list = snap.GirlItems.GirlItemInfo ??= [];
+          const itemId = list.reduce((m: number, x: any) => Math.max(m, Number(x.ItemId) || 0), 0) + 1;
+          const it = { ItemId: itemId, ItemType: Number(dress.Id), StackNum: 1 };
+          list.push(it); items.push(it);
+          Object.assign(g, { SpecialDressSlot: itemId, SpecialDressVisibleCheck: true });
+          extraGirl.AppearanceChanged = true;
+        }
+      }
+      st.dept!.gift = { index: Math.max(...picked), count: picked.length, delta };
+    }
+    g.Familiarity = (Number(g.Familiarity) || 0) + delta;
+    syncGirl(g);
+    if (xp) { ui.Charexp = (Number(ui.Charexp) || 0) + xp; levelUp(snap); }
+    st.dept!.scripts.push(name);
+    const dressType = items[0]?.ItemType;
+    const ins = scriptRows(girl, name, lv).map((r) => {
+      const o = toIns(r, r.Function === 'POPUP' ? { Index: 3 } : {});
+      if (o.Function === 'CHANGE' && o.Parameter) { o.Parameter[0] = DEPT_PLACE; if (dressType) o.Parameter[2] = String(dressType); }
+      return o;
+    });
+    save();
+    return [{ name: 'MsgScriptProgressAns', body: { Seq: 1, Index: index, ...(items.length ? { GirlItemInfo: items } : {}),
+      Script: { Chunk: [chunk(girl, name, lv, ins)] }, UserInfo: ui, GirlInfo: { ...g, DeltaFamiliarity: delta, ...extraGirl } } }];
+  }
+  if (depth === 1 && index === 3) {
+    const gift = st.dept!.gift;
+    return [{ name: 'MsgScriptProgressAns', body: { Seq: 1, Index: index,
+      ...(gift ? { GiftForGirl: { Girlid: girl, GiftIndex: gift.index, Count: gift.count } } : {}),
+      GirlInfo: { Girlid: girl, Familiarity: g.Familiarity, DeltaFamiliarity: gift?.delta ?? 0 } } }];
+  }
+  if (depth === 0 && index === st.finalIndex) {
+    g.DateCoolTime = Math.floor(Date.now() / 1000) + COOLTIME_SEC;
+    snap.GirlMemorySet ??= { GirlMemory: [], Version: 1 };
+    let gm = snap.GirlMemorySet.GirlMemory.find((x: any) => Number(x.Girlid) === girl);
+    if (!gm) { gm = { Girlid: girl, Memory: [] }; snap.GirlMemorySet.GirlMemory.push(gm); }
+    // 기록 순서: 받은 아이템 {Id, RewardState 1} 이 대본 기억보다 먼저
+    for (const it of snap.GirlItems?.GirlItemInfo ?? []) {
+      if (!gm.Memory.some((x: any) => Number(x.Id) === Number(it.ItemType))) gm.Memory.push({ Id: Number(it.ItemType), RewardState: 1 });
+    }
+    for (const n of st.dept!.scripts) {
+      const def = memories!.find((m: any) => Number(m.GirlId) === girl && m.Scriptname === n);
+      if (!def) continue;
+      let m = gm.Memory.find((x: any) => Number(x.Id) === Number(def.Id));
+      if (!m) { m = { Id: Number(def.Id), FmFlag: 0, RewardState: 2, MemoryName: n }; gm.Memory.push(m); }
+      m.FmFlag = (Number(m.FmFlag) || 0) | (1 << (lv - 1));
+    }
+    setState(ctx, null);
+    ctx.store.putUser(ctx.session.accountId, snap);
+    return [
+      { name: 'MsgScriptProgressAns', body: head },
+      { name: 'MsgDateResultAns', body: { Seq: 2, GirlInfo: g, UserInfo: ui, GgraphPatch: { Gnode: [] }, CallScript: [], UpdateGirlInfo: [],
+        GirlMemorySet: snap.GirlMemorySet } },
+    ];
+  }
+  console.warn(`[date] 백화점: 처리하지 않은 진행 단계 ${JSON.stringify(body)}`);
+  return [{ name: 'MsgScriptProgressAns', body: head }];
+}

@@ -20,7 +20,7 @@ import { register, type Msg, type Ctx } from '../rpc.js';
 import { grantItem } from '../inventory.js';
 import { ensureGirl, newGirlRecord } from './girls.js';
 import { refreshQuests, questEvent } from '../quests.js';
-import { table as gtable, areaOf, areaRace, finalAttr, makeOpponent, newOwnedCar, randomPart, grantPart, carDefOf, relativeDifficulty } from '../gamecalc.js';
+import { table as gtable, areaOf, areaRace, finalAttr, makeOpponent, newOwnedCar, randomPart, grantPart, carDefOf, relativeDifficulty, syncGirl } from '../gamecalc.js';
 
 const ST = { PLAYABLE: 1, CLEAR: 2, FAIL: 4, LOCKED: 8, WIN: 16 } as const;
 const TUT_INFO_FIRST_GIRL = 512;
@@ -308,7 +308,8 @@ register('MsgBattleResultReq', (body, ctx: Ctx): Msg[] => {
       main.NewRace = []; main.BossCleared = true; main.Progress = zone.Progress; main.DeltaProgress = 0;
       // 실기록: 에피소드 2 보스 클리어 응답에서 SystemOpenFlag 4096 -> 4097 (주간 레이스 개방 WRaceOpen=3 시점과 일치, 의미는 추정)
       // 실기록: 에피소드 1 보스 클리어 응답에서 Completion 에 EpisodeProgress(2097152)
-      if (Number(zone.ZoneId) === 1) ui.Completion = Number(ui.Completion) | 2097152;
+      //   + RecommendFriend(16) (친구 기능 개방, 실기록 diag6 1-20)
+      if (Number(zone.ZoneId) === 1) ui.Completion = Number(ui.Completion) | 2097152 | 16;
       if (Number(zone.ZoneId) === 2) { ui.SystemOpenFlag = Number(ui.SystemOpenFlag) | 1; ui.FightTicket ??= 10; } // 실기록: FightTicket 10 등장
       const nz = snap.RaceZones.RaceZone.find((z: any) => Number(z.ZoneId) === Number(zone.ZoneId) + 1);
       if (nz && nz.Locked) {
@@ -331,7 +332,7 @@ register('MsgBattleResultReq', (body, ctx: Ctx): Msg[] => {
   // 동승 캐릭터 친밀도
   const updateGirl: any[] = [];
   const passenger = passengerOn ? (snap.MyGirls?.MyGirlInfo ?? []).find((g: any) => Number(g.Girlid) === Number(ui.PassengerGirl)) : null;
-  if (passenger && fam) { passenger.Familiarity = (Number(passenger.Familiarity) || 0) + fam; updateGirl.push(passenger); }
+  if (passenger && fam) { passenger.Familiarity = (Number(passenger.Familiarity) || 0) + fam; syncGirl(passenger); updateGirl.push(passenger); }
 
   // 결과 응답 FinalAttr 은 이번 숙련도 증가 전 값 (실기록: MasteryAttr 은 새 값, FinalAttr 은 이전 값 기준)
   const faBefore = finalAttr(girlRace ? { ...snap, UserInfo: { ...ui, PassengerGirl: -1 } } : snap, car);
