@@ -70,3 +70,13 @@ register('MsgUpdateCompletionReq', (body, ctx): Msg[] => {
   ctx.store.putUser(ctx.session.accountId, snap);
   return [{ name: 'MsgUpdateCompletionAns', body: { Result: 0, Completion: snap.UserInfo?.Completion } }];
 });
+
+// 코스메틱 '확인함' 표시: 상태에 기록만 하고 응답 메시지는 없다(클라이언트는 결과를 쓰지 않음).
+register('MsgCosmeticSeenReq', (body, ctx): Msg[] => {
+  const snap = ctx.store.getUser(ctx.session.accountId);
+  if (snap && Array.isArray(body?.Ids)) {
+    snap.CosmeticSeen = Array.from(new Set([...(snap.CosmeticSeen ?? []), ...body.Ids]));
+    ctx.store.putUser(ctx.session.accountId, snap);
+  }
+  return [];
+});

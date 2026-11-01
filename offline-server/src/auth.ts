@@ -51,6 +51,13 @@ export class Auth {
   }
 }
 
+// 응답 서명: x-dg-s = base64url(HMAC_SHA256(sigKey, "res\n" + 요청 nonce + "\n" + sha256hex(응답본문)))
+// 클라이언트는 인증 요청의 응답에 이 헤더가 없거나 다르면 "The answer was altered on the way." 로 거부한다.
+export function signResponse(session: Session, nonce: string, bodyText: string): string {
+  const bodyHash = createHash('sha256').update(bodyText).digest('hex');
+  return b64url(createHmac('sha256', b64urlDecode(session.sigKey)).update(`res\n${nonce}\n${bodyHash}`).digest());
+}
+
 function hashInt(s: string): number {
   let h = 0;
   for (let i = 0; i < s.length; i++) h = (Math.imul(h, 31) + s.charCodeAt(i)) | 0;

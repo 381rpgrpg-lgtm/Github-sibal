@@ -2,17 +2,24 @@
 
 클라이언트가 **코드 수정 없이** 접속하는 로컬 권위 서버. Node.js + TypeScript + SQLite. 설계는 `DESIGN.md`.
 
+## 검증 결과 (2026-11-01, 헤드리스 Chromium, 외부 요청 0건)
+클라이언트 빌드 `b3ff0b7…` + 사용자 제공 평문 에셋으로 **로그인 → 로딩 → 메인 진입(이벤트·보상 팝업, 3D 차량 렌더)** 까지 확인.
+요청 417건 전부 200, `/api/rpc` 9건 미구현 메시지 없음. 실시간 `/api/pvp` 만 미구현(인증 실패 로그).
+
 ## 현재 구현 상태
 - [x] `/api/login` (느슨 인증: 아무 계정이나 통과, 로컬 토큰·sigKey 발급)
 - [x] `/api/content` (게임 규칙 테이블·텍스트 서빙)
 - [x] `/api/scripts` (스토리 대사; 기본=영어, `?lang=jp`=일본어)
 - [x] `/api/packs` (매니페스트 서빙; 에셋 본체는 별도)
-- [x] `/api/session`
+- [x] `/api/session`, `/api/notices/active`, `/api/news`, `/api/news/seen` (오프라인용 빈 응답)
+- [x] 응답 서명(`x-dg-s`, `res\n<nonce>\n<sha256(body)>`) — 클라이언트 검증 통과
+- [x] `/sw.js` 자체 작성 통과형 서비스워커(원본 미사용), 평문 에셋 모드에서 `/api/packs` 빈 목록
+- [x] 평문 에셋 `/a/local/**` → `data/assets/**`, 테이블 `/a/local/data/*.json` → `data/tables/*`
 - [x] `/api/rpc` 디스패처 + `MsgLoginReq` → `[MsgLoginAns, MsgUserData]`, `MsgSetOptionReq`, `MsgUpdateCompletionReq`
 - [ ] 메인 화면 조작 메시지 (차량·상점·데이트 …) — 2단계
 - [ ] `MsgCheatReq` 전체 토글 — 2단계
 - [ ] `/api/pvp` WebSocket (실시간 레이스) — 4단계
-- [ ] 에셋 서빙 — 사용자가 복호화 후 `data/assets/`
+- [x] 에셋 서빙 — 사용자 제공 평문(`data/assets/`, `data/tables/`)
 
 검증: 위 부트 경로는 curl 로 end-to-end 확인됨(login→content→rpc MsgLoginReq→scripts 모두 200).
 
