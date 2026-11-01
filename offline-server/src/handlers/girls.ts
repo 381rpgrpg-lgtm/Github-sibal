@@ -57,7 +57,7 @@ const TUTORIAL_FIRST_SELECT = 256; // UserInfo.Completion 비트 (실서버: 109
 register('MsgFirstSelectReq', (body, ctx): Msg[] => {
   const girlid = Number(body?.SelectGirl?.Girlid);
   const snap = ctx.store.getUser(ctx.session.accountId);
-  if (!snap || !girlDef(girlid)) return [{ name: 'MsgFirstSelectAns', body: { Result: 1 } }];
+  if (!snap || !girlDef(girlid)) return [{ name: 'MsgFirstSelectAns', body: { Result: 0 } }];
   const g = ensureGirl(snap, girlid);
   Object.assign(g, { ...newGirlRecord(girlid), ...g, State: GIRL_OPEN });
   openGraphNode(snap, girlid);

@@ -4,15 +4,15 @@ import { register, type Msg } from '../rpc.js';
 
 // 특별 메시지(운영 공지성 팝업) 목록 — 없음.
 register('MsgSpecialMessageListReq', (): Msg[] => [
-  { name: 'MsgSpecialMessageListAns', body: { Result: 0, SpecialMessages: [] } },
+  { name: 'MsgSpecialMessageListAns', body: { Result: 1, SpecialMessages: [] } },
 ]);
-register('MsgSpecialMessageSeenReq', (): Msg[] => [{ name: 'MsgSpecialMessageSeenAns', body: { Result: 0 } }]);
+register('MsgSpecialMessageSeenReq', (): Msg[] => [{ name: 'MsgSpecialMessageSeenAns', body: { Result: 1 } }]);
 
 // 결제 보상 연출 — 오프라인에는 결제가 없다.
 register('MsgPurchaseRevealReq', (): Msg[] => [
-  { name: 'MsgPurchaseRevealAns', body: { Result: 0, PurchaseReveal: [] } },
+  { name: 'MsgPurchaseRevealAns', body: { Result: 1, PurchaseReveal: [] } },
 ]);
-register('MsgPurchaseRevealSeenReq', (): Msg[] => [{ name: 'MsgPurchaseRevealSeenAns', body: { Result: 0 } }]);
+register('MsgPurchaseRevealSeenReq', (): Msg[] => [{ name: 'MsgPurchaseRevealSeenAns', body: { Result: 1 } }]);
 
 // 거리 이름 이벤트 — Open=false 이면 클라이언트가 아무 것도 하지 않는다.
-register('MsgStreetNamesReq', (): Msg[] => [{ name: 'MsgStreetNamesAns', body: { Result: 0, Open: false } }]);
+register('MsgStreetNamesReq', (): Msg[] => [{ name: 'MsgStreetNamesAns', body: { Result: 1, Open: false } }]);

@@ -67,7 +67,7 @@ register('MsgLoginReq', (_body, ctx): Msg[] => {
   if (!ctx.showNotices && base.NoticeInfo) base.NoticeInfo = { ...base.NoticeInfo, Notice: [] };
   const snap = applyCheat(base, ctx.cheat);
   return [
-    { name: 'MsgLoginAns', body: { Seq: 1, Result: 0, Accountid: ctx.session.accountId } },
+    { name: 'MsgLoginAns', body: { Seq: 1, Result: 1, Accountid: ctx.session.accountId } },
     { name: 'MsgUserData', body: snap },
   ];
 });
@@ -77,14 +77,14 @@ register('MsgSetOptionReq', (body, ctx): Msg[] => {
   const snap = ctx.store.getUser(ctx.session.accountId) ?? newAccountSnapshot();
   snap.Options = { ...(snap.Options ?? {}), ...(body ?? {}) };
   ctx.store.putUser(ctx.session.accountId, snap);
-  return [{ name: 'MsgSetOptionAns', body: { Result: 0 } }];
+  return [{ name: 'MsgSetOptionAns', body: { Result: 1 } }];
 });
 
 register('MsgUpdateCompletionReq', (body, ctx): Msg[] => {
   const snap = ctx.store.getUser(ctx.session.accountId) ?? newAccountSnapshot();
   if (snap.UserInfo && body?.Completion != null) snap.UserInfo.Completion = body.Completion;
   ctx.store.putUser(ctx.session.accountId, snap);
-  return [{ name: 'MsgUpdateCompletionAns', body: { Result: 0, Completion: snap.UserInfo?.Completion } }];
+  return [{ name: 'MsgUpdateCompletionAns', body: { Result: 1, Completion: snap.UserInfo?.Completion } }];
 });
 
 // 코스메틱 '확인함' 표시: New=false 로 저장하고 갱신된 Cosmetics 를 돌려준다.
@@ -96,7 +96,7 @@ register('MsgCosmeticSeenReq', (body, ctx): Msg[] => {
     if (snap.Cosmetics) snap.Cosmetics.Version = (snap.Cosmetics.Version ?? 0) + 1;
     ctx.store.putUser(ctx.session.accountId, snap);
     // 클라이언트는 모든 응답 본문에 공통 patch 를 적용한다: Cosmetics.Owned 가 오면 상태를 교체.
-    return [{ name: 'MsgCosmeticSeenAns', body: { Result: 0, Cosmetics: snap.Cosmetics } }];
+    return [{ name: 'MsgCosmeticSeenAns', body: { Result: 1, Cosmetics: snap.Cosmetics } }];
   }
   return [];
 });

@@ -22,6 +22,7 @@ export interface Msg {
 export type Handler = (body: any, ctx: Ctx) => Msg[] | Promise<Msg[]>;
 
 const handlers = new Map<string, Handler>();
+const RECORD_ALWAYS = new Set((process.env.DG_RECORD_ALWAYS ?? '').split(',').map((x) => x.trim()).filter(Boolean));
 
 export function register(name: string, fn: Handler): void {
   handlers.set(name, fn);
@@ -29,6 +30,17 @@ export function register(name: string, fn: Handler): void {
 
 export async function dispatch(name: string, body: any, ctx: Ctx): Promise<{ messages: Msg[] } | { error: string }> {
   const fn = handlers.get(name);
+  // 기록 강제 목록(DG_RECORD_ALWAYS=Msg1,Msg2): 로컬 구현이 있어도 실서버 응답을 기록하기 위해 보낸다.
+  if (ctx.upstream && RECORD_ALWAYS.has(name)) {
+    try {
+      const up = await ctx.upstream.rpc(name, body);
+      const messages: Msg[] = Array.isArray(up?.messages) ? up.messages : [];
+      console.log(`[rpc] ${name} -> (upstream, 강제 기록) ${messages.map((m) => m.name).join(',') || '(none)'}`);
+      return { messages };
+    } catch (e) {
+      console.warn(`[rpc] ${name} upstream 실패, 로컬 처리로 전환: ${(e as Error).message}`);
+    }
+  }
   if (!fn) {
     // 기록 모드: 실서버(사용자 계정)로 보내 응답을 그대로 돌려주고 data/recorded/ 에 저장.
     if (ctx.upstream) {

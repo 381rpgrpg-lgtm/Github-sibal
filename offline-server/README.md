@@ -61,6 +61,7 @@ npm run build && npm start      # 또는 npm run dev
 DG_RECORD=1 DG_LOGIN=<id> DG_PASSWORD=<pw> npm start
 ```
 - 자격증명은 환경변수로만 받으며 저장소에 남기지 않는다. 구현된 메시지는 실서버로 보내지 않는다.
+- 이미 구현된 메시지도 실서버 응답을 기록하려면 `DG_RECORD_ALWAYS=MsgBattleStartReq,MsgBattleResultReq,MsgBuyProductReq` 처럼 지정한다(그 메시지는 실서버가 처리하고 로컬 상태에는 반영되지 않는다).
 - 실서버 계정 상태가 실제로 바뀐다(레이스 진행 등).
 - 캐시(유료 재화) 소비 요청은 실거래로 분류되어 이 환경에서 차단된다. 상점·가챠는 서버 제공 데이터(itemTable, boxOdds)로 로컬 구현한다.
 - 로컬 상태 백업은 서버를 멈춘 뒤 `state.db`, `state.db-wal`, `state.db-shm` 를 함께 복사할 것(WAL 모드).

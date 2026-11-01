@@ -10,14 +10,14 @@ const box = (b: any) => ({ Version: b?.Version ?? 1, Mail: b?.Mail ?? [], Count:
 
 register('MsgCheckMailBoxReq', (body, ctx): Msg[] => {
   const snap = ctx.store.getUser(ctx.session.accountId) ?? {};
-  const ans: any = { Result: 0, MailBox: box(snap.MailBox), SocialBox: box(snap.SocialBox) };
+  const ans: any = { Result: 1, MailBox: box(snap.MailBox), SocialBox: box(snap.SocialBox) };
   if (body?.OpenPopup !== undefined) ans.OpenPopup = body.OpenPopup;
   return [{ name: 'MsgCheckMailBoxAns', body: ans }];
 });
 
 register('MsgGetMailItemReq', (body, ctx): Msg[] => {
   const snap = ctx.store.getUser(ctx.session.accountId);
-  if (!snap) return [{ name: 'MsgGetMailItemAns', body: { Result: 1, GetMailStatus: 0 } }];
+  if (!snap) return [{ name: 'MsgGetMailItemAns', body: { Result: 0, GetMailStatus: 0 } }];
   const want = body?.Mail ?? {};
   const keep: any[] = [];
   let got = 0;
@@ -39,7 +39,7 @@ register('MsgGetMailItemReq', (body, ctx): Msg[] => {
   return [{
     name: 'MsgGetMailItemAns',
     body: {
-      Result: 0,
+      Result: got > 0 ? 1 : 0,
       GetMailStatus: got > 0 ? 1 : 0,
       MailBox: snap.MailBox,
       SocialBox: box(snap.SocialBox),
