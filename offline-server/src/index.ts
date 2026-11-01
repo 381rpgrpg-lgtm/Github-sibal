@@ -14,6 +14,7 @@ import './handlers/mail.js';
 import './handlers/girls.js';
 import './handlers/battle.js';
 import './handlers/shop.js';
+import './handlers/garage.js';
 
 const cfg = JSON.parse(readFileSync(new URL('../config.json', import.meta.url), 'utf8'));
 const CLIENT_DIR = new URL('../data/client/', import.meta.url).pathname;
@@ -23,11 +24,13 @@ const TABLE_DIR = new URL('../data/tables/', import.meta.url).pathname; // decry
 const missLog = new Map<string, number>(); // 서빙 실패한 경로 (연결 검증용)
 const PLAINTEXT_ASSETS = existsSync(join(ASSET_DIR, 'assets'));
 const DIAG_DIR = new URL('../data/diag/', import.meta.url).pathname;
+const PUBLIC_DIR = new URL('../public/', import.meta.url).pathname; // PWA 아이콘 (원본 APK 런처 아이콘)
 // 웹 클라이언트 호환성 패치 (src/clientpatch.ts). 앱은 이 build/해시 기준으로 파일을 검증·갱신한다.
 const patchedClient = buildPatchedClient(CLIENT_DIR, {
   pictureMode: cfg.client?.pictureMode ?? 'auto',
   carEffects: cfg.client?.carEffects ?? 'on',
   glTrace: cfg.client?.glTrace ?? 'off',
+  appOnly: cfg.client?.appOnly !== false,
 });
 for (const a of patchedClient.applied) console.log('[client] 패치 적용:', a);
 function clientBuild(): string | null {
@@ -183,6 +186,28 @@ const server = createServer(async (req, res) => {
     }
     if (method === 'GET' && path === '/__offline/misses') {
       return reply(200, Object.fromEntries([...missLog].sort((a, b) => b[1] - a[1])));
+    }
+    // PWA: Chrome 에서 '홈 화면에 추가' 하면 주소창 없는 전체 화면·가로로 실행된다.
+    //   (2026-11-01 실기기: 같은 폰에서 앱 WebView 는 10fps·드라이버 크래시, Chrome 은 60fps·크래시 없음)
+    if (method === 'GET' && path === '/manifest.webmanifest') {
+      res.writeHead(200, { 'content-type': 'application/manifest+json; charset=utf-8', 'cache-control': 'no-cache' });
+      return res.end(JSON.stringify({
+        name: 'Drift Girls Reborn (Offline)', short_name: 'Drift Girls', id: '/', start_url: '/', scope: '/',
+        display: 'fullscreen', orientation: 'landscape', background_color: '#000000', theme_color: '#000000',
+        icons: [
+          { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+          { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+          { src: '/icons/icon-maskable-192.png', sizes: '192x192', type: 'image/png', purpose: 'maskable' },
+          { src: '/icons/icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+        ],
+      }));
+    }
+    if (method === 'GET' && /^\/icons\/icon(-maskable)?-(192|512)\.png$/.test(path)) {
+      const f = join(PUBLIC_DIR, path.slice('/icons/'.length));
+      if (existsSync(f)) {
+        res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'max-age=86400' });
+        return res.end(readFileSync(f));
+      }
     }
     // 웹 클라이언트 정적 파일 (/, /static/*, /favicon 등). 인증 불필요.
     if (method === 'GET' && (path === '/' || path.startsWith('/static/') || path === '/index.html')) {

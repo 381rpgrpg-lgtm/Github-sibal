@@ -55,6 +55,16 @@ npm run build && npm start      # 또는 npm run dev
 
 메인 화면이 **그려지려면 에셋이 필요**하다(위 2). 에셋 없이도 서버 API 계약은 위 curl 검증대로 동작한다.
 
+## 권장 실행: 같은 폰의 Chrome (PWA)
+2026-11-01 실기기(SM-N981N, Adreno 650)에서 같은 서버·같은 클라이언트로 비교:
+- 앱(APK, 시스템 WebView): 메인 10fps, 차고 4fps, 해상도 853x384(호환 모드), 썸네일·강화 연출에서 GPU 드라이버 크래시
+- Chrome: 1546x608 해상도에서 60fps, 차량 썸네일·가챠 연출(전용 렌더러) 포함 크래시 없음
+
+Chrome 에서 `http://127.0.0.1:8080` 접속 → 메뉴 ⋮ → **홈 화면에 추가**(또는 앱 설치). 서버가 PWA 매니페스트
+(`/manifest.webmanifest`: 전체 화면, 가로, 원본 APK 런처 아이콘 `public/icon-*.png`)를 제공하므로 홈 화면 아이콘으로
+주소창 없이 실행된다. 썸네일·연출 우회(`client.pictureMode`/`carEffects`)는 `appOnly` 이면 앱 WebView 에만 적용되고
+Chrome 에서는 원본대로 동작한다.
+
 ## 기록 모드 (개발용)
 로컬에 아직 없는 메시지를 **본인 계정으로 실서버에 보내고** 요청/응답을 `data/recorded/` 에 저장한다. 이 기록을 근거로 로컬 처리를 구현한다.
 ```

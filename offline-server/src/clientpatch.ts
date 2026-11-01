@@ -48,7 +48,7 @@ const REINFORCE_FX_RE = /async\['playReinforceEffect'\]\(\{carTop:[\w$]+,makeCar
 const COMBINE_FX_RE = /async\[[\w$]+\(0x[0-9a-f]+\)\]\(\{carLeft:[\w$]+,carRight:[\w$]+,makeCar:[\w$]+\}\)\{/;
 const PICTURE_MODE_RE = /(function\s+[\w$]+\(\{env:[\w$]+=globalThis,gpu:[\w$]+=[\w$]+\(\(\)=>'','gpu'\)\}=\{\}\)\{)(return\s+[\w$]+\([\w$]+\)&&\()/;
 
-export interface PatchOptions { pictureMode: string; carEffects?: string; glTrace?: string }
+export interface PatchOptions { pictureMode: string; carEffects?: string; glTrace?: string; appOnly?: boolean }
 
 export function buildPatchedClient(clientDir: string, opts: PatchOptions): PatchedClient {
   const out: PatchedClient = { build: null, files: new Map(), manifest: null, applied: [] };
@@ -94,10 +94,15 @@ export function buildPatchedClient(clientDir: string, opts: PatchOptions): Patch
   const indexPath = join(clientDir, 'index.html');
   if (existsSync(indexPath)) {
     const html = readFileSync(indexPath, 'utf8');
-    const inject = `<script>window.__dgPictureMode=${JSON.stringify(mode)};window.__dgCarFx=${JSON.stringify(carFx)};`
+    // appOnly(기본): 썸네일·연출 우회는 앱(WebView, DGAndroid 있음)에서만. Chrome 등 브라우저는 원본 동작(auto/on).
+    const app = opts.appOnly === false ? 'true' : '!!(window.DGAndroid||window.driftGirlsAndroid)';
+    const inject = `<link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#000000">`
+      + `<meta name="mobile-web-app-capable" content="yes">`
+      + `<script>(function(){var A=${app};window.__dgPictureMode=A?${JSON.stringify(mode)}:'auto';`
+      + `window.__dgCarFx=A?${JSON.stringify(carFx)}:'on';})();`
       + `window.__dgGlTrace=${JSON.stringify(glTrace)};${WHERE_BEACON}${GL_TRACE}</script>`;
     out.files.set('index.html', Buffer.from(html.replace('<head>', '<head>' + inject), 'utf8'));
-    out.applied.push(`index.html: __dgPictureMode=${mode}, __dgCarFx=${carFx}, __dgGlTrace=${glTrace}, where-beacon`);
+    out.applied.push(`index.html: __dgPictureMode=${mode}, __dgCarFx=${carFx} (${opts.appOnly === false ? 'all' : 'app only'}), __dgGlTrace=${glTrace}, where-beacon, manifest`);
   }
 
   // 3) 매니페스트 해시·build 갱신

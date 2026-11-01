@@ -6,8 +6,15 @@
 //  - 연료: Fuelvalue=최대, Fueltime=가득 차는 시각. 연료 1 = fuelFillTime(15)초.  (클라이언트 fuelState, 기록 +300s)
 //  - 튜토리얼 비트(UserInfo.Completion): 시작 시 InformationFirstGirl(512), 패배 시 LoseRace(268435456) (기록)
 //  - 패배: XP = floor(RewardXP*0.3), 코인 0, 동승 캐릭터 친밀도 +RewardFamiliarity   (기록 42 -> 12, +10)
-//  - 숙련도: 레이스마다 Mastery +1 (MasteryCapacity 까지), MasteryAttr 가장 낮은 능력치 +1 (기록)
-// 추정(기록 없음): 승리 보상 = RewardCoin/RewardXP 전액, 다음 레이스 해금, ClearRec 등급 계산, 존 Progress +10
+//  - 숙련도: 패배 +1, 승리 +2 (MasteryCapacity 까지), 1씩 MasteryAttr 가장 낮은 능력치(동률이면 앞쪽)에 (기록 3->5, {1,1,1,0}->{2,1,1,1})
+//  - 승리 (기록 2026-11-01 1-2, State 5 -> 18): State = CLEAR|WIN (PLAYABLE·FAIL 해제). CLEAR 는 '보상 미수령' 표시로,
+//      MsgRaceRewardReq 에서 CLEAR 를 지우고 PLAYABLE 을 켠다(18 -> 17). StateHard 8 -> 1.
+//      RaceCoin = BaseCoin(RewardCoin) x CoinRatio(1), XP = RewardXP 전액, 친밀도 +RewardFamiliarity, DQUEST_RACE +1.
+//      다음 레이스(잠김 8)는 State 1 로 바꿔 RaceZone.NewRace 로 보낸다. Progress +10, DeltaProgress 10.
+//  - 등급 보상: Race.ClearRec {Grade, Flag(최고 등급 비트 S1 A2 B4 C8 D16), Bonus(받은 S/A/B 보너스 비트 1|2|4)}
+//      최상위 ClearRec {Grade, Flag(이번에 새로 받은 보너스 S64 A128 B256), RewardInfo}. 결과 화면은 Flag&65/130/260 으로 체크 표시.
+//      기록: 첫 S 클리어 = S·A·B 보너스 동시 → 코인 1600 + 캐시 2 (RewardInfo.Coin 2200 = 600 + 1600).
+// 추정(기록 없음): 등급 판정 기준(S: 미스·배드 0 / A: 미스 0 / B: 그 외), 보너스를 하나씩 받을 때의 금액 배분
 import { readFileSync, existsSync } from 'node:fs';
 import { register, type Msg, type Ctx } from '../rpc.js';
 
@@ -52,6 +59,15 @@ export function fuelNow(ui: any): number {
 }
 function spendFuel(ui: any, amount: number) {
   ui.Fueltime = Math.max(Number(ui.Fueltime) || 0, now()) + amount * FUEL_FILL_SEC;
+}
+
+/** PropertySet.Property[] 의 Nvalue 증가 (일일 미션 카운터 등) */
+export function bumpProperty(snap: any, name: string, by: number) {
+  snap.PropertySet ??= { Property: [] };
+  snap.PropertySet.Property ??= [];
+  const p = snap.PropertySet.Property.find((x: any) => x.PropertyName === name);
+  if (p) p.Nvalue = (Number(p.Nvalue) || 0) + by;
+  else snap.PropertySet.Property.push({ PropertyName: name, Nvalue: by });
 }
 
 function withFinalAttr(car: any) {
@@ -111,10 +127,36 @@ register('MsgBattleResultReq', (body, ctx: Ctx): Msg[] => {
   const ui = snap.UserInfo;
   const win = !!body.IsPlayerWin || !!(ctx.cheat.enabled && ctx.cheat.forceWinBattles);
   const changed: any[] = [race];
+  const newRaces: any[] = [];
+  let deltaProgress = 0;
 
   // 보상
   const baseCoin = Number(race.RewardCoin) || 0;
-  const coin = win ? baseCoin : 0;
+  const raceCoin = win ? baseCoin : 0;
+  // 등급 보너스 (승리 시)
+  let clearTop: any = null, bonusCoin = 0, bonusCash = 0;
+  if (win) {
+    const miss = Number(body.MissCnt) || 0, bad = Number(body.BadCnt) || 0;
+    const grade = miss === 0 && bad === 0 ? 1 : miss === 0 ? 2 : 3; // 1=S 2=A 3=B (추정 기준)
+    const prev = race.ClearRec ?? {};
+    const earned = [1, 2, 4].filter((b, i) => i + 1 >= grade).reduce((a, b) => a | b, 0); // S면 S|A|B
+    const fresh = earned & ~(Number(prev.Bonus) || 0);
+    const n = [1, 2, 4].filter((b) => fresh & b).length;
+    bonusCoin = Math.round((1600 * n) / 3); bonusCash = Math.round((2 * n) / 3); // 기록: 3개 = 1600 / 2
+    const bestBit = 1 << (grade - 1);
+    const prevBest = Number(prev.Flag) || 0;
+    race.ClearRec = {
+      Grade: prevBest && prevBest < bestBit ? Number(prev.Grade) || grade : grade,
+      Flag: prevBest && prevBest < bestBit ? prevBest : bestBit,
+      Bonus: (Number(prev.Bonus) || 0) | earned,
+    };
+    clearTop = {
+      Grade: grade, Flag: [64, 128, 256].filter((_, i) => fresh & (1 << i)).reduce((a, b) => a | b, 0),
+      RewardInfo: { Coin: bonusCoin, Charexp: 0, Cash: bonusCash, Familiartity: 0, ItemInfo: [], CarInfo: [] },
+    };
+  }
+  const coin = raceCoin + bonusCoin;
+  ui.Cash = (Number(ui.Cash) || 0) + bonusCash;
   const xp = win ? Number(race.RewardXP) || 0 : Math.floor((Number(race.RewardXP) || 0) * 0.3);
   const fam = Number(race.RewardFamiliarity) || 0;
   ui.Coin = (Number(ui.Coin) || 0) + coin;
@@ -124,14 +166,15 @@ register('MsgBattleResultReq', (body, ctx: Ctx): Msg[] => {
   // 레이스 상태
   if (win) {
     const firstWin = !(race.State & ST.WIN);
-    race.State = (race.State & ~ST.FAIL) | ST.PLAYABLE | ST.WIN;
+    race.State = (race.State & ~(ST.FAIL | ST.PLAYABLE)) | ST.CLEAR | ST.WIN;
     if (Number(body.RaceLevel ?? 1) === 1 && race.StateHard & ST.LOCKED) race.StateHard = ST.PLAYABLE;
-    race.ClearRec = { Grade: Number(body.MissCnt) === 0 ? 1 : Number(body.MissCnt) <= 3 ? 2 : 3, Flag: 1, Bonus: 7 };
     if (firstWin) {
-      zone.Progress = (Number(zone.Progress) || 0) + 10;
-      const order = [...zone.Race].sort((a: any, b: any) => a.RaceIndex - b.RaceIndex);
+      deltaProgress = 10;
+      zone.Progress = (Number(zone.Progress) || 0) + deltaProgress;
+      const order = [...zone.Race].filter((r: any) => Number(r.RaceLifeType ?? 1) === 1)
+        .sort((a: any, b: any) => a.RaceIndex - b.RaceIndex);
       const next = order[order.indexOf(race) + 1];
-      if (next && next.State & ST.LOCKED) { next.State = ST.PLAYABLE; changed.push(next); }
+      if (next && next.State & ST.LOCKED) { next.State = ST.PLAYABLE; newRaces.push(next); }
       if (!next) { // 존 마지막(보스) 승리 → 다음 존 해금
         const zones = snap.RaceZones.RaceZone;
         const nz = zones.find((z: any) => Number(z.ZoneId) === Number(zone.ZoneId) + 1);
@@ -152,15 +195,17 @@ register('MsgBattleResultReq', (body, ctx: Ctx): Msg[] => {
   const passenger = (snap.MyGirls?.MyGirlInfo ?? []).find((g: any) => Number(g.Girlid) === Number(ui.PassengerGirl));
   if (passenger && fam) { passenger.Familiarity = (Number(passenger.Familiarity) || 0) + fam; updateGirl.push(passenger); }
 
-  // 차량 숙련도
-  if ((Number(car.Mastery) || 0) < (Number(car.MasteryCapacity) || 0)) {
+  // 차량 숙련도 (패배 +1, 승리 +2)
+  car.DeltaMastery = 0;
+  for (let i = 0; i < (win ? 2 : 1) && (Number(car.Mastery) || 0) < (Number(car.MasteryCapacity) || 0); i++) {
     car.Mastery = (Number(car.Mastery) || 0) + 1;
     car.MasteryAttr ??= { AttribMaxSpd: 0, AttribAcc: 0, AttribStability: 0, AttribDrift: 0 };
     const keys = ['AttribMaxSpd', 'AttribAcc', 'AttribStability', 'AttribDrift'];
     const low = keys.reduce((a, k) => ((car.MasteryAttr[k] || 0) < (car.MasteryAttr[a] || 0) ? k : a), keys[0]);
     car.MasteryAttr[low] = (car.MasteryAttr[low] || 0) + 1;
-    car.DeltaMastery = 1;
+    car.DeltaMastery += 1;
   }
+  if (win) bumpProperty(snap, 'DQUEST_RACE', 1); // 일일 미션 '레이스 3회 승리' (기록 0 -> 1)
 
   ctx.store.putUser(ctx.session.accountId, snap);
   const action = [2, 3, 4, 5, 6].map((a, i) => ({
@@ -170,18 +215,42 @@ register('MsgBattleResultReq', (body, ctx: Ctx): Msg[] => {
     name: 'MsgBattleResultAns',
     body: {
       Seq: 1, Result: 1, IsPlayerWin: win, UserInfo: ui,
-      RewardInfo: { Coin: coin, Charexp: xp, Cash: 0, Familiartity: fam, ItemInfo: [], CarInfo: [] },
+      RewardInfo: { Coin: coin, Charexp: xp, Cash: bonusCash, Familiartity: fam, ItemInfo: [], CarInfo: [] },
       BattleScore: Number(body.BattleScore) || 0, ItemInfo: [], Race: race,
-      RaceZone: [{ ZoneId: zone.ZoneId, ChangeRace: changed }],
+      RaceZone: [{
+        ZoneId: zone.ZoneId, ChangeRace: changed,
+        ...(newRaces.length ? { NewRace: newRaces } : {}),
+        ...(deltaProgress ? { Progress: zone.Progress, DeltaProgress: deltaProgress } : {}),
+      }],
+      ...(clearTop ? { ClearRec: clearTop } : {}),
       RaceAction: { Action: action, ComboCount: Number(body.ComboCount) || 0 },
-      DeltaInfo: { Charexp: xp, Coin: coin, Cash: 0 }, BoostCompensation: 0,
+      DeltaInfo: { Charexp: xp, Coin: coin, Cash: bonusCash }, BoostCompensation: 0,
       OpponentCarInfo: race.OpponentCarInfo, IsHeroineDrive: !!body.IsHeroineDrive, PerfectStart: !!body.PerfectStart,
-      RaceType: body.RaceType ?? 1, RaceLevel: body.RaceLevel ?? 1, BaseCoin: baseCoin, CoinRatio: 1,
+      RaceType: body.RaceType ?? 1, RaceLevel: body.RaceLevel ?? 1, BaseCoin: baseCoin, CoinRatio: 1, RaceCoin: raceCoin,
       MyTimeRecord: body.TimeRecord, OpponentTimeRecord: body.OpponentTimeRecord, LeftBoost: body.LeftBoost ?? 0,
       MyMaxSpeed: body.LinearMaxSpeed, MyMaxDriftSpeed: body.CornerMaxSpeed, Withdraw: false,
       RetryFuel: Number(car.FuelConsume) || 20, MyCarInfo: withFinalAttr(car), NewCars: [],
       UpdateGirlInfo: updateGirl, GgraphPatch: { Gnode: [] }, Track: race.Track,
-      Passenger: passenger ? { GirlInfo: passenger } : {}, SpotSale: [],
+      Passenger: passenger ? { GirlInfo: passenger } : {}, SpotSale: [], PropertySet: snap.PropertySet,
+    },
+  }];
+});
+
+// 레이스 보상 수령: {ZoneId, RaceId} -> {Seq, Result, Race(수령 전), RaceZone[{ZoneId, ChangeRace[수령 후]}], ItemInfo, NewCars, UserInfo}
+// 기록: Race.State 18 그대로, ChangeRace.State 17 (CLEAR 해제, PLAYABLE), RewardBoxKind/ItemInfo null. 코인 등은 결과에서 이미 지급.
+register('MsgRaceRewardReq', (body, ctx: Ctx): Msg[] => {
+  const snap = ctx.store.getUser(ctx.session.accountId);
+  const { zone, race } = findRace(snap ?? {}, body?.ZoneId, body?.RaceId);
+  if (!snap || !zone || !race) return [{ name: 'MsgRaceRewardAns', body: { Seq: 1, Result: 0 } }];
+  const before = structuredClone(race);
+  if (race.State & ST.CLEAR) race.State = (race.State & ~ST.CLEAR) | ST.PLAYABLE;
+  ctx.store.putUser(ctx.session.accountId, snap);
+  return [{
+    name: 'MsgRaceRewardAns',
+    body: {
+      Seq: 1, Result: 1, Race: before,
+      RaceZone: [{ ZoneId: zone.ZoneId, ChangeRace: [{ ...race, RewardBoxKind: null, ItemInfo: null }] }],
+      ItemInfo: [], NewCars: [], UserInfo: snap.UserInfo,
     },
   }];
 });
