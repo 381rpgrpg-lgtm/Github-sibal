@@ -8,7 +8,7 @@
 // MsgCarSlotCostReq {CarInfo:{Carid, SlotNum}} -> {Seq, Result 1, CarInfo(변경 없음), Cost:{Coin}}  기록: 슬롯 2 = 코인 100
 // MsgUpdateNquestReq {NquestInfo:{QuestId, State}} -> {Seq, Result 1, RequestedQuestId, RequestedState,
 //   NquestInfo:[{QuestId, State, Objective:[{ObjId, CurrentValue 0, CompleteCash, CashCleared false}]}]}  (nquests.json 정의 순서)
-// 추정(기록 없음): 슬롯 3 이상 비용(carSlotOpenTables 가 비어 있음 → 거절), MsgCarSlotOpenReq 응답 형식,
+// 추정(기록 없음): 실측 외 슬롯 비용(carSlotOpenTables 가 비어 있음 → 거절),
 //   이미 부품이 있는 칸에 장착할 때 기존 부품을 무료로 빼는 동작, 퀘스트 목표 진행도 갱신(미구현).
 import { readFileSync, existsSync } from 'node:fs';
 import { register, type Msg } from '../rpc.js';
@@ -25,7 +25,15 @@ function init() {
   quests = new Map((load('nquests.json')?.Quest ?? []).map((q: any) => [Number(q.Id), q]));
 }
 const TUT_EQUIP_PARTS = 65536;
-const SLOT_COST: Record<number, { Coin?: number; Cash?: number }> = { 2: { Coin: 100 } };
+// 슬롯 비용 (실측): ★1 차량 슬롯 2 = 100코인, ★2 차량 슬롯 2 = 200코인. 최대 슬롯은 cars.json Slot(★1 2, ★2 3).
+//   ★1 슬롯 3 요청은 실서버 Result 2. 그 외 조합(슬롯 3 이상, ★3 이상)은 실측 없음 -> 거절.
+const SLOT_COST: Record<string, { Coin?: number; Cash?: number }> = { '1|2': { Coin: 100 }, '2|2': { Coin: 200 } };
+import { carDef } from './upgradecalc.js';
+const slotCost = (car: any, slot: number) => {
+  const max = Number(carDef(car.Cartype)?.Slot) || 2;
+  if (slot > max) return null;
+  return SLOT_COST[`${Number(car.Grade) || 1}|${slot}`] ?? null;
+};
 
 function detachCost(part: any): number {
   init();
@@ -86,7 +94,7 @@ register('MsgCarSlotCostReq', (body, ctx): Msg[] => {
   const snap = ctx.store.getUser(ctx.session.accountId);
   const car = snap && findCar(snap, body?.CarInfo?.Carid);
   const slot = Number(body?.CarInfo?.SlotNum) || 0;
-  const cost = SLOT_COST[slot];
+  const cost = car ? slotCost(car, slot) : null;
   if (!car || !cost) {
     console.warn(`[parts] 슬롯 비용 미확인: 슬롯 ${slot} (기록 없음)`);
     return [{ name: 'MsgCarSlotCostAns', body: { Seq: 1, Result: 2 } }];
@@ -98,7 +106,7 @@ register('MsgCarSlotOpenReq', (body, ctx): Msg[] => {
   const snap = ctx.store.getUser(ctx.session.accountId);
   const car = snap && findCar(snap, body?.CarInfo?.Carid);
   const slot = (Number(car?.SlotNum) || 1) + 1;
-  const cost = SLOT_COST[slot];
+  const cost = car ? slotCost(car, slot) : null;
   if (!snap || !car || !cost) return [{ name: 'MsgCarSlotOpenAns', body: { Seq: 1, Result: 2 } }];
   const ui = snap.UserInfo;
   if ((Number(ui.Coin) || 0) < (cost.Coin ?? 0)) return [{ name: 'MsgCarSlotOpenAns', body: { Seq: 1, Result: 3, UserInfo: ui } }];
@@ -106,7 +114,8 @@ register('MsgCarSlotOpenReq', (body, ctx): Msg[] => {
   ui.Coin -= cost.Coin ?? 0; ui.Cash -= cost.Cash ?? 0;
   car.SlotNum = slot;
   ctx.store.putUser(ctx.session.accountId, snap);
-  return [{ name: 'MsgCarSlotOpenAns', body: { Seq: 1, Result: 1, CarInfo: car, UserInfo: ui } }];
+  // 실측 응답: {Seq, Result 1, CarInfo(SlotNum 갱신), Cost, UserInfo}
+  return [{ name: 'MsgCarSlotOpenAns', body: { Seq: 1, Result: 1, CarInfo: car, Cost: cost, UserInfo: ui } }];
 });
 
 register('MsgUpdateNquestReq', (body, ctx): Msg[] => {
