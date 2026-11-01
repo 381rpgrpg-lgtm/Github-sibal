@@ -15,6 +15,8 @@
   "showNotices": false,
   "client": {
     "pictureMode": "off",
-    "note": "차량 썸네일 렌더 방식. auto=원본 판단, own=전용 렌더러, shared=메인 렌더러 공유, off=썸네일 생략. SM-N981N(Adreno 650)에서 shared 는 차고, own 은 로딩 중 크래시 → off 기본."
+    "carEffects": "off",
+    "glTrace": "first",
+    "note": "pictureMode: 차량 썸네일 렌더 방식(auto=원본 판단, own=전용 렌더러, shared=메인 렌더러 공유, off=썸네일 생략). carEffects: 강화·합성 3D 연출(on|off). glTrace: 실기기 진단(off|perf=프레임 측정만|first=GL 조합 첫 사용 기록+프레임 측정, data/diag/gltrace.log). SM-N981N(Adreno 650)에서 shared 는 차고, own 은 로딩 중, 강화 연출은 결과 직전에 크래시 → off/off/first 기본."
   }
 }

@@ -24,7 +24,11 @@ const missLog = new Map<string, number>(); // 서빙 실패한 경로 (연결 �
 const PLAINTEXT_ASSETS = existsSync(join(ASSET_DIR, 'assets'));
 const DIAG_DIR = new URL('../data/diag/', import.meta.url).pathname;
 // 웹 클라이언트 호환성 패치 (src/clientpatch.ts). 앱은 이 build/해시 기준으로 파일을 검증·갱신한다.
-const patchedClient = buildPatchedClient(CLIENT_DIR, { pictureMode: cfg.client?.pictureMode ?? 'auto' });
+const patchedClient = buildPatchedClient(CLIENT_DIR, {
+  pictureMode: cfg.client?.pictureMode ?? 'auto',
+  carEffects: cfg.client?.carEffects ?? 'on',
+  glTrace: cfg.client?.glTrace ?? 'off',
+});
 for (const a of patchedClient.applied) console.log('[client] 패치 적용:', a);
 function clientBuild(): string | null {
   return patchedClient.build;
@@ -131,6 +135,21 @@ const server = createServer(async (req, res) => {
         console.log(`[where] ${j.k}: ${String(j.v).slice(0, 200)}`);
         mkdirSync(DIAG_DIR, { recursive: true });
         appendFileSync(join(DIAG_DIR, 'where.log'), `${new Date(Number(j.t) || Date.now()).toISOString()} ${j.k} ${j.v}\n`);
+      } catch { /* 무시 */ }
+      res.writeHead(204); return res.end();
+    }
+    // GL 추적·프레임 측정 (src/gltrace.ts). first/ctx/prog 는 파일에만, perf 는 콘솔에도 한 줄로.
+    if (path === '/__offline/gltrace' && method === 'POST') {
+      const body = await readBody(req);
+      try {
+        const j = JSON.parse(body);
+        const line = `${new Date(Number(j.t) || Date.now()).toISOString()} ${j.k} ${j.n ?? ''} ${j.v ?? ''}${j.i ? ' ' + JSON.stringify(j.i) : ''}`;
+        mkdirSync(DIAG_DIR, { recursive: true });
+        appendFileSync(join(DIAG_DIR, 'gltrace.log'), line + '\n');
+        if (j.k === 'perf') {
+          const i = j.i ?? {};
+          console.log(`[perf] ${i.fps}fps p50 ${i.p50}ms p95 ${i.p95}ms max ${i.max}ms draws/f ${i.drawsPerFrame} long ${i.longN}/${i.longMs}ms canvas ${i.canvas} dpr ${i.dpr} @${j.v}`);
+        } else if (j.k === 'ctx') console.log(`[gl] ctx ${j.v}`);
       } catch { /* 무시 */ }
       res.writeHead(204); return res.end();
     }

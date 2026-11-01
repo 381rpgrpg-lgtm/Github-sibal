@@ -88,3 +88,21 @@
   로딩 중 `warmUp` 이 전용 WebGL 렌더러를 만들 때 크래시(외주사가 Adreno 5xx/6xx 에 shared 를 강제한 이유로 추정).
 - 2차 조치 `off`: 차량 썸네일 렌더링을 생략(호출부는 null 을 무시하므로 썸네일만 빈다). 기본값.
 - 진단 보조: 클라이언트 위치 표식(DGAndroid.note where/gpu)을 서버 `/__offline/where` 로도 보내 `data/diag/where.log` 에 기록.
+
+### 5-1. 3차 실기기 결과 (2026-11-01, `off` 적용 후)
+- 진단 zip: 크래시 5건이 **모두 같은 드라이버 지점** `libGLESv2_adreno.so+0x198bc4`, 스레드 `Chrome_InProcGp`
+  - `MYGARAGE>carpic:shared-draw` 2건(원본 방식), `EMPTY>carpic:copy`·`EMPTY>carpic:draw` 각 1건(1차 `own` → 로딩 중 확정)
+  - `MYGARAGE` 진입 69초 뒤 1건(`off`): 차고 진입은 성공, **튜토리얼 강화 버튼** 직후
+- 강화 흐름(클라이언트 코드 확인): 버튼 → `MsgUpgradeCarReq {TargetCarInfo:{Carid}}`(튜토리얼은 재료 차량 없음)
+  → 로컬 서버 미구현이라 기록 모드에서 원본 서버로 전달 → 성공 응답 → `CarUpgradeResult` 가
+  `ReinforceEffectStart` → `playReinforceEffect`(메인 렌더러에 ModelHigh 차량 2대 + 파티클 연출) → 크래시
+- 결과 화면은 `effect.playing` 이 꺼지면(최대 5초) 바로 결과를 보여 주고, 합성 연출도 Promise 종료 후 결과 팝업을 띄운다
+  → 연출을 건너뛰어도 흐름은 그대로.
+- 4차 조치: `config.json client.carEffects: "off"` → 강화·합성 3D 연출 생략(결과 화면은 표시).
+- 추적 도구: `client.glTrace: "first"` (`offline-server/src/gltrace.ts`)
+  - (컨텍스트, GL 연산, 셰이더 프로그램, 그리기 대상) 조합이 처음 나올 때 동기 XHR 로 서버에 기록하고 `gl.finish()`
+    → 크래시가 나면 `data/diag/gltrace.log` 의 마지막 `first` 줄이 원인 조합. 앱 쪽 `lastWhere` 에도 `gl …` 로 남김.
+  - 5초마다 `perf`(FPS, p50/p95/최대 프레임 시간, 프레임당 draw, 긴 작업, 캔버스 해상도) → 렉 정량화.
+  - 헤드리스 확인: 메인 진입 정상, 첫 사용 조합 87건 기록, 안정 후 60fps / draw 22회(SwiftShader).
+- 미해결: 같은 드라이버 크래시의 공통 원인(특정 셰이더 조합으로 추정, 미확인). 레벨업·보스 클리어·가챠 연출도
+  차량을 별도 장면에 그리므로 같은 위험이 있다 → gltrace 로 확인 후 공통 대응.

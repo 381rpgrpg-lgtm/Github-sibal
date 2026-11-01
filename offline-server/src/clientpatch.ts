@@ -19,10 +19,12 @@
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
+import { GL_TRACE } from './gltrace.js';
 
 // DGAndroid 브리지를 감싸 note('where'|'gpu') 를 서버에도 보낸다. 다른 메서드는 원본 그대로 위임.
 const WHERE_BEACON = `(function(){try{var A=window.DGAndroid;if(!A||typeof Proxy!=='function')return;var last='';
-var send=function(k,v){try{if(k==='where'&&v===last)return;if(k==='where')last=v;navigator.sendBeacon('/__offline/where',JSON.stringify({k:k,v:String(v),t:Date.now()}));}catch(e){}};
+var send=function(k,v){try{if(k==='where'){window.__dgWhere=String(v);if(v===last)return;last=v;}navigator.sendBeacon('/__offline/where',JSON.stringify({k:k,v:String(v),t:Date.now()}));}catch(e){}};
+window.__dgRawNote=function(k,v){try{A.note(k,v);}catch(e){}};
 window.DGAndroid=new Proxy(A,{get:function(o,p){var f=o[p];if(p==='note')return function(k,v){send(k,v);return f.call(o,k,v);};return typeof f==='function'?f.bind(o):f;}});
 send('boot','page');}catch(e){}})();`;
 
@@ -38,14 +40,24 @@ const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex');
 // pictureMode 함수 머리: function <name>({env:<a>=globalThis,gpu:<b>=<f>(()=>'','gpu')}={}){return
 const WARMUP_RE = /async\['warmUp'\]\([\w$]+\)\{/;
 const RENDER_RE = /\['render'\]\([\w$]+,[\w$]+,[\w$]+,[\w$]+=0x0,[\w$]+=0x0,\{yaw:[^}]*\}=\{\}\)\{/;
+// 강화·합성 3D 연출 (index-*.js). 'off' 이면 연출 없이 바로 결과 화면으로 간다.
+//   강화 결과 화면(CarUpgradeResult.IShowResult)은 effect.playing 이 꺼지면(최대 5초 대기) 결과를 표시하고,
+//   합성(CombinationEffectStart)은 연출 Promise 가 끝나면 결과 팝업을 띄우므로 바로 반환해도 흐름이 그대로다.
+//   2026-11-01 실기기: 튜토리얼 강화 직후 이 연출(메인 렌더러에 ModelHigh 차량 + 파티클)에서 같은 Adreno 크래시.
+const REINFORCE_FX_RE = /async\['playReinforceEffect'\]\(\{carTop:[\w$]+,makeCar:[\w$]+,effect:[\w$]+\}\)\{/;
+const COMBINE_FX_RE = /async\[[\w$]+\(0x[0-9a-f]+\)\]\(\{carLeft:[\w$]+,carRight:[\w$]+,makeCar:[\w$]+\}\)\{/;
 const PICTURE_MODE_RE = /(function\s+[\w$]+\(\{env:[\w$]+=globalThis,gpu:[\w$]+=[\w$]+\(\(\)=>'','gpu'\)\}=\{\}\)\{)(return\s+[\w$]+\([\w$]+\)&&\()/;
 
-export function buildPatchedClient(clientDir: string, opts: { pictureMode: string }): PatchedClient {
+export interface PatchOptions { pictureMode: string; carEffects?: string; glTrace?: string }
+
+export function buildPatchedClient(clientDir: string, opts: PatchOptions): PatchedClient {
   const out: PatchedClient = { build: null, files: new Map(), manifest: null, applied: [] };
   const mfPath = join(clientDir, 'api-client.json');
   if (!existsSync(mfPath)) return out;
   const manifest = JSON.parse(readFileSync(mfPath, 'utf8'));
   const mode = ['own', 'shared', 'off'].includes(opts.pictureMode) ? opts.pictureMode : 'auto';
+  const carFx = opts.carEffects === 'off' ? 'off' : 'on';
+  const glTrace = ['first', 'perf'].includes(String(opts.glTrace)) ? String(opts.glTrace) : 'off';
 
   // 1) pictureMode 스위치 (engine-*.js)
   const staticDir = join(clientDir, 'static');
@@ -64,13 +76,28 @@ export function buildPatchedClient(clientDir: string, opts: { pictureMode: strin
     }
   }
 
+  // 1b) 강화·합성 3D 연출 스위치 (index-*.js)
+  if (existsSync(staticDir)) {
+    for (const name of readdirSync(staticDir)) {
+      if (!/^index-.*\.js$/.test(name)) continue;
+      const src = readFileSync(join(staticDir, name), 'utf8');
+      if (!REINFORCE_FX_RE.test(src)) continue;
+      const guard = `if(globalThis.__dgCarFx==='off')return;`;
+      let patched = src.replace(REINFORCE_FX_RE, `$&${guard}`);
+      patched = patched.replace(COMBINE_FX_RE, `$&${guard}`);
+      out.files.set(`static/${name}`, Buffer.from(patched, 'utf8'));
+      out.applied.push(`carEffects switch -> static/${name}`);
+    }
+  }
+
   // 2) index.html 에 설정값 주입
   const indexPath = join(clientDir, 'index.html');
   if (existsSync(indexPath)) {
     const html = readFileSync(indexPath, 'utf8');
-    const inject = `<script>window.__dgPictureMode=${JSON.stringify(mode)};${WHERE_BEACON}</script>`;
+    const inject = `<script>window.__dgPictureMode=${JSON.stringify(mode)};window.__dgCarFx=${JSON.stringify(carFx)};`
+      + `window.__dgGlTrace=${JSON.stringify(glTrace)};${WHERE_BEACON}${GL_TRACE}</script>`;
     out.files.set('index.html', Buffer.from(html.replace('<head>', '<head>' + inject), 'utf8'));
-    out.applied.push(`index.html: __dgPictureMode=${mode}, where-beacon`);
+    out.applied.push(`index.html: __dgPictureMode=${mode}, __dgCarFx=${carFx}, __dgGlTrace=${glTrace}, where-beacon`);
   }
 
   // 3) 매니페스트 해시·build 갱신
