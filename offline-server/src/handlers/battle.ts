@@ -77,14 +77,28 @@ function withFinalAttr(car: any) {
   return { ...car, FinalAttr };
 }
 
-function levelUp(ui: any) {
+// 레벨업. 기록(2026-11-01, 데이트 결과로 Lv1 -> 2): Charexp 는 다음 레벨 기준으로 다시 센다(214+27=241 -> Lv2, Charexp 5 = 241-236),
+//   Fuelvalue = 새 레벨 Gasoline(418), Fueltime = 지금(연료 가득), UserInfo.LevelUp {Level, FuelMax, Coin 0, Cash 2},
+//   우편 'Level reward' 61002(캐시) x2. 추정: 레벨마다 캐시 2.
+export function levelUp(snap: any) {
+  const ui = snap.UserInfo;
   const rows: any[] = (table('playerLevelTable.json')?.Level ?? []).filter((r: any) => r.Id);
   for (;;) {
     const cur = rows.find((r) => Number(r.Id) === Number(ui.Charlevel));
     const next = rows.find((r) => Number(r.Id) === Number(ui.Charlevel) + 1);
-    if (!cur || !next || Number(ui.Charexp) < Number(next.AccExp)) break;
+    if (!cur || !next || Number(ui.Charexp) < Number(cur.Exp)) break;
+    ui.Charexp = Number(ui.Charexp) - Number(cur.Exp);
     ui.Charlevel = Number(ui.Charlevel) + 1;
-    if (next.Gasoline) ui.Fuelvalue = Number(next.Gasoline); // 레벨별 최대 연료
+    if (next.Gasoline) ui.Fuelvalue = Number(next.Gasoline);
+    ui.Fueltime = now();
+    ui.LevelUp = { Level: ui.Charlevel, FuelMax: ui.Fuelvalue, Coin: 0, Cash: 2 };
+    snap.MailBox ??= { Version: 1, Mail: [], Count: 0 };
+    snap.mailSeq = (Number(snap.mailSeq) || Math.max(0, ...snap.MailBox.Mail.map((m: any) => Number(m.MailId) || 0))) + 1;
+    snap.MailBox.Mail.push({
+      MailId: snap.mailSeq, MailType: 4, BoxType: 0, Itemnum: 2, Itemtype: 61002, Subject: 'Level reward',
+      Content: `Player level ${ui.Charlevel} reached.`, ExpireTime: Math.floor(now()) + 7 * 86400,
+    });
+    snap.MailBox.Count = snap.MailBox.Mail.length;
   }
 }
 
@@ -161,7 +175,8 @@ register('MsgBattleResultReq', (body, ctx: Ctx): Msg[] => {
   const fam = Number(race.RewardFamiliarity) || 0;
   ui.Coin = (Number(ui.Coin) || 0) + coin;
   ui.Charexp = (Number(ui.Charexp) || 0) + xp;
-  levelUp(ui);
+  delete ui.LevelUp;
+  levelUp(snap);
 
   // 레이스 상태
   if (win) {
@@ -207,6 +222,9 @@ register('MsgBattleResultReq', (body, ctx: Ctx): Msg[] => {
   }
   if (win) bumpProperty(snap, 'DQUEST_RACE', 1); // 일일 미션 '레이스 3회 승리' (기록 0 -> 1)
 
+  // LevelUp 은 이번 응답에만 싣고 저장하지 않는다(다음 응답·로그인에서 레벨업 연출이 반복되지 않게).
+  const uiOut = { ...ui };
+  delete ui.LevelUp;
   ctx.store.putUser(ctx.session.accountId, snap);
   const action = [2, 3, 4, 5, 6].map((a, i) => ({
     Action: a, Count: Number([body.MissCnt, body.BadCnt, body.GoodCnt, body.PerfectCnt, body.ExcellentCnt][i]) || 0,
@@ -214,7 +232,7 @@ register('MsgBattleResultReq', (body, ctx: Ctx): Msg[] => {
   return [{
     name: 'MsgBattleResultAns',
     body: {
-      Seq: 1, Result: 1, IsPlayerWin: win, UserInfo: ui,
+      Seq: 1, Result: 1, IsPlayerWin: win, UserInfo: uiOut,
       RewardInfo: { Coin: coin, Charexp: xp, Cash: bonusCash, Familiartity: fam, ItemInfo: [], CarInfo: [] },
       BattleScore: Number(body.BattleScore) || 0, ItemInfo: [], Race: race,
       RaceZone: [{

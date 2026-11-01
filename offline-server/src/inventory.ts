@@ -23,6 +23,13 @@ function nextItemId(snap: any): number {
 export function grantItem(snap: any, itemtype: number, count: number): boolean {
   const def = itemDef(itemtype);
   if (!def || count <= 0) return false;
+  // 재화 아이템(Category 610: 61001 coin / 61002 cash / 61003 xp)은 인벤토리가 아니라 UserInfo 에 더한다.
+  if (Number(def.Category) === 610) {
+    const field = ({ coin: 'Coin', cash: 'Cash', xp: 'Charexp' } as Record<string, string>)[String(def.Info)];
+    if (!field) return false;
+    snap.UserInfo[field] = (Number(snap.UserInfo[field]) || 0) + count;
+    return true;
+  }
   snap.Items ??= { ItemInfo: [] };
   snap.Items.ItemInfo ??= [];
   const max = Math.max(1, Number(def.Stack) || 1);

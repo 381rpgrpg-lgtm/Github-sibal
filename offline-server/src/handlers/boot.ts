@@ -63,6 +63,7 @@ function dailyGift(snap: any, ctx: Ctx): void {
 register('MsgLoginReq', (_body, ctx): Msg[] => {
   const base = loadSnapshot(ctx);
   dailyGift(base, ctx);
+  if (base.UserInfo) delete base.UserInfo.LevelUp;
   // 이벤트 공지 팝업(로그인마다 재표시)은 오프라인 기본값에서 끈다. config.showNotices=true 로 켬.
   if (!ctx.showNotices && base.NoticeInfo) base.NoticeInfo = { ...base.NoticeInfo, Notice: [] };
   const snap = applyCheat(base, ctx.cheat);
