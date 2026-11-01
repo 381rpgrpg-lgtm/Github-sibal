@@ -42,7 +42,7 @@ export async function dispatch(name: string, body: any, ctx: Ctx): Promise<{ mes
       }
     }
     // 아직 미구현 메시지: 비어있지 않은 명시적 에러로 로그에 남긴다.
-    console.warn(`[rpc] 미구현 메시지: ${name}`);
+    console.warn(`[rpc] 미구현 메시지: ${name} ${JSON.stringify(body).slice(0, 2000)}`);
     return { error: `unimplemented:${name}` };
   }
   const messages = await fn(body, ctx);

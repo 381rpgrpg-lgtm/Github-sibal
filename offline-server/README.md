@@ -19,7 +19,9 @@
 - [x] 메인 허브 주기 메시지, 우편함 조회·수령, 코스메틱 확인, 출석보상 1일 1회
 - [x] 튜토리얼 첫 캐릭터 선택(`MsgFirstSelectReq`), 동승 변경(`MsgSelectPassengerReq`), 캐릭터 메모리(`MsgUpdateGirlMemoryReq`)
 - [x] 스토리 레이스 시작·결과(`MsgBattleStartReq`/`MsgBattleResultReq`): 연료, 보상, 레벨, 숙련도, 친밀도, 다음 레이스 해금
-- [ ] 차량 강화·상점 구매·가챠·데이트 등 나머지 메시지 — 진행 중
+- [x] 상점 구매(`MsgBuyProductReq`): 코인·캐시·소셜포인트·토큰 가격, 코인 팩, 일반 아이템, 차량, 구매 한도, 차고 칸, 부족 코드(7/3)
+- [ ] 부품 상자 가챠·부품·캐릭터 아이템·현금 결제 상품 — 미지원(Result 8 로 거절, 로그에 사유). 부품 아이템 형식·등급 매핑 기록이 없어 원본과 다르게 동작할 위험
+- [ ] 차량 강화(재료 차량 필요)·데이트 등 나머지 메시지 — 진행 중
 - [ ] `MsgCheatReq` 전체 토글 — 2단계
 - [ ] `/api/pvp` WebSocket (실시간 레이스) — 4단계
 - [x] 에셋 서빙 — 사용자 제공 평문(`data/assets/`, `data/tables/`)
@@ -60,6 +62,8 @@ DG_RECORD=1 DG_LOGIN=<id> DG_PASSWORD=<pw> npm start
 ```
 - 자격증명은 환경변수로만 받으며 저장소에 남기지 않는다. 구현된 메시지는 실서버로 보내지 않는다.
 - 실서버 계정 상태가 실제로 바뀐다(레이스 진행 등).
+- 캐시(유료 재화) 소비 요청은 실거래로 분류되어 이 환경에서 차단된다. 상점·가챠는 서버 제공 데이터(itemTable, boxOdds)로 로컬 구현한다.
+- 로컬 상태 백업은 서버를 멈춘 뒤 `state.db`, `state.db-wal`, `state.db-shm` 를 함께 복사할 것(WAL 모드).
 
 ## 설정 `config.json`
 - `strictSignatures`: `false`(오프라인 기본). `true` 로 바꾸면 `x-dg-s` HMAC 검증(원격 분리용).
