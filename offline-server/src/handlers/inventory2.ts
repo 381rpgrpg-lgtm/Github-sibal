@@ -181,3 +181,21 @@ register('MsgGetWRaceInfoReq', (_b, ctx): Msg[] => {
     MyWRaceRec: { MyRank: races.map((w: any) => ({ WRaceId: w.WRaceId, LeftTry: 0, TryCost: { Cash: 0 } })) },
     ...(snap ? { UserInfo: snap.UserInfo } : {}) } }];
 });
+
+// ── 꾸미기 장착 MsgCosmeticEquipReq {Carid, Type, Id} -> {Result 1, Cosmetics, CarInfo:[차량]}
+//   실측: plate_halloween -> 차량 PlateStyle = 'plate_halloween'. 종류 -> 필드는 클라이언트 표
+//   (underglow Underglow, smoke TyreSmoke, flame NitroFlame, lights LightTint, windows WindowTint, rims RimStyle,
+//    calipers CaliperColor, plate PlateStyle, trail DriftTrail, paint Paint, aura Aura). 보유한 것만, 빈 Id 는 해제(추정).
+const COSMETIC_FIELD: Record<string, string> = { underglow: 'Underglow', smoke: 'TyreSmoke', flame: 'NitroFlame', lights: 'LightTint',
+  windows: 'WindowTint', rims: 'RimStyle', calipers: 'CaliperColor', plate: 'PlateStyle', trail: 'DriftTrail', paint: 'Paint', aura: 'Aura' };
+register('MsgCosmeticEquipReq', (body, ctx): Msg[] => {
+  const snap = ctx.store.getUser(ctx.session.accountId);
+  const car = snap && findCar(snap, body?.Carid);
+  const field = COSMETIC_FIELD[String(body?.Type)];
+  const id = body?.Id ? String(body.Id) : '';
+  const owned = (snap?.Cosmetics?.Owned ?? []).some((c: any) => String(c.Id) === id);
+  if (!car || !field || (id && !owned)) return [{ name: 'MsgCosmeticEquipAns', body: { Seq: 1, Result: 2 } }];
+  if (id) car[field] = id; else delete car[field];
+  ctx.store.putUser(ctx.session.accountId, snap);
+  return [{ name: 'MsgCosmeticEquipAns', body: { Seq: 1, Result: 1, Cosmetics: snap.Cosmetics, CarInfo: [{ ...car, CarEffect: car.CarEffect ?? [] }] } }];
+});
