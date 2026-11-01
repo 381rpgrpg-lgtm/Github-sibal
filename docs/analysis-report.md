@@ -72,3 +72,15 @@
 - 그래서 0단계용으로 진단 APK를 만들었습니다 (`diag-build/`). 원본 dex 대비 변경은 명령어 1개이며 서명 검증(v2/v3)을 통과했습니다.
 - **실기기 실행은 아직 검증하지 않았습니다.** 이 환경에는 에뮬레이터가 없습니다.
 - 다음 단계: 수집된 JSON에서 톰스톤을 해석해 원인을 A(GPU 드라이버), B(메모리 부족), C(백그라운드 중단) 중 하나로 확정하고, 3장의 해당 대응을 적용합니다.
+
+
+## 5. 크래시 원인 확정 (2026-11-01, 실기기 진단 기록)
+- 기기: Samsung SM-N981N (Galaxy Note20 5G), Android 13, WebView 156.0.8078.47, GPU **Adreno 650**
+- 종료: `crash_native` SIGSEGV / SEGV_MAPERR, 프레임 #00 `libGLESv2_adreno.so`, 스레드 `Chrome_InProcGpuThread`
+- 직전 위치: `MYGARAGE>carpic:shared-draw`, 메모리 PSS 155MB (메모리 부족 아님)
+- 해석: WebView 의 GPU 작업은 앱 프로세스 안(InProcGpuThread)에서 돈다 → 드라이버 크래시가 앱 전체 종료로 이어짐 (가설 A 확정)
+- 코드 원인: 클라이언트 `pictureMode()` 가 Android 앱에서 `안전모드 단계>=1 || isOldAdreno(/Adreno [56]xx/)` 이면
+  차량 썸네일을 메인 렌더러로 그려 읽어오는 `shared` 방식을 선택. 이 기기에서는 그 방식이 Adreno 드라이버를 죽인다.
+  크래시 후 앱이 켜는 안전모드도 `shared` 조건이라 재실행해도 같은 지점에서 다시 크래시.
+- 조치: 오프라인 서버가 클라이언트를 서빙할 때 `pictureMode()` 앞에 스위치를 넣는다(`offline-server/src/clientpatch.ts`,
+  `config.json client.pictureMode`, 기본 `own`). 실기기 검증 대기.

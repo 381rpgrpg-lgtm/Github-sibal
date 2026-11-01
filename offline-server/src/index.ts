@@ -7,6 +7,7 @@ import { Auth, signResponse, type Session } from './auth.js';
 import { loadGameData } from './content.js';
 import { dispatch, type Ctx } from './rpc.js';
 import { Upstream } from './upstream.js';
+import { buildPatchedClient } from './clientpatch.js';
 import './handlers/boot.js';
 import './handlers/main.js';
 import './handlers/mail.js';
@@ -22,9 +23,11 @@ const TABLE_DIR = new URL('../data/tables/', import.meta.url).pathname; // decry
 const missLog = new Map<string, number>(); // 서빙 실패한 경로 (연결 검증용)
 const PLAINTEXT_ASSETS = existsSync(join(ASSET_DIR, 'assets'));
 const DIAG_DIR = new URL('../data/diag/', import.meta.url).pathname;
-// 받아 둔 웹 클라이언트의 빌드 해시 (data/client/api-client.json)
+// 웹 클라이언트 호환성 패치 (src/clientpatch.ts). 앱은 이 build/해시 기준으로 파일을 검증·갱신한다.
+const patchedClient = buildPatchedClient(CLIENT_DIR, { pictureMode: cfg.client?.pictureMode ?? 'auto' });
+for (const a of patchedClient.applied) console.log('[client] 패치 적용:', a);
 function clientBuild(): string | null {
-  try { return JSON.parse(readFileSync(join(CLIENT_DIR, 'api-client.json'), 'utf8')).build ?? null; } catch { return null; }
+  return patchedClient.build;
 }
 // 통과형 서비스워커: 설치 즉시 활성화하고 fetch 를 가로채지 않는다(모든 요청은 서버로 직행).
 const PASSTHROUGH_SW = `self.addEventListener('install', () => self.skipWaiting());
@@ -41,6 +44,14 @@ const MIME: Record<string, string> = {
 // 평문 웹 클라이언트 서빙 (data/client/). 사용자가 scripts/fetch-client.mjs 로 채운다.
 function serveClient(res: ServerResponse, relPath: string, root = CLIENT_DIR): boolean {
   const rel = relPath === '/' ? 'index.html' : normalize(relPath).replace(/^(\.\.(\/|\\|$))+/, '').replace(/^\//, '');
+  if (root === CLIENT_DIR) {
+    const patched = patchedClient?.files.get(rel);
+    if (patched) {
+      res.writeHead(200, { 'content-type': MIME[rel.slice(rel.lastIndexOf('.'))] ?? 'application/octet-stream', 'cache-control': 'no-store', 'access-control-allow-origin': '*' });
+      res.end(patched);
+      return true;
+    }
+  }
   const file = join(root, rel);
   if (!file.startsWith(root) || !existsSync(file) || !statSync(file).isFile()) return false;
   const ext = file.slice(file.lastIndexOf('.'));
@@ -128,8 +139,7 @@ const server = createServer(async (req, res) => {
     }
     // api/client 매니페스트: data/client/api-client.json 그대로
     if (path === '/api/client' && method === 'GET') {
-      const mf = join(CLIENT_DIR, 'api-client.json');
-      if (existsSync(mf)) return reply(200, JSON.parse(readFileSync(mf, 'utf8')));
+      if (patchedClient.manifest) return reply(200, patchedClient.manifest);
       return reply(503, { error: 'client_not_fetched' });
     }
     // 평문 에셋: <base href>=/a/local/ 기준 상대경로 요청 → data/<경로>
