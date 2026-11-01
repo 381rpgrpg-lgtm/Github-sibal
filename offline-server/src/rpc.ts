@@ -31,7 +31,9 @@ export function register(name: string, fn: Handler): void {
 export async function dispatch(name: string, body: any, ctx: Ctx): Promise<{ messages: Msg[] } | { error: string }> {
   const fn = handlers.get(name);
   // 기록 강제 목록(DG_RECORD_ALWAYS=Msg1,Msg2): 로컬 구현이 있어도 실서버 응답을 기록하기 위해 보낸다.
-  if (ctx.upstream && RECORD_ALWAYS.has(name)) {
+  // DG_RECORD_ALWAYS='*' 는 전체 중계: 로그인부터 모든 메시지를 실서버 계정으로 처리하고 기록한다(로컬 DB 는 건드리지 않음).
+  //   로컬 진행 상태와 실계정 상태가 달라 실서버가 거절하는 기능(예: 로컬에서만 해금된 데이트)을 실계정 흐름 그대로 녹화할 때 쓴다.
+  if (ctx.upstream && (RECORD_ALWAYS.has(name) || RECORD_ALWAYS.has('*'))) {
     try {
       const up = await ctx.upstream.rpc(name, body);
       const messages: Msg[] = Array.isArray(up?.messages) ? up.messages : [];

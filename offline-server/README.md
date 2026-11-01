@@ -71,6 +71,7 @@ Chrome 에서는 원본대로 동작한다.
 DG_RECORD=1 DG_LOGIN=<id> DG_PASSWORD=<pw> npm start
 ```
 - 자격증명은 환경변수로만 받으며 저장소에 남기지 않는다. 구현된 메시지는 실서버로 보내지 않는다.
+- `DG_RECORD_ALWAYS='*'`: 전체 중계. 로그인부터 모든 메시지를 실계정으로 처리·기록한다(로컬 DB 는 그대로). 로컬에서만 진행된 기능을 실계정 흐름으로 녹화할 때 사용.
 - 이미 구현된 메시지도 실서버 응답을 기록하려면 `DG_RECORD_ALWAYS=MsgBattleStartReq,MsgBattleResultReq,MsgBuyProductReq` 처럼 지정한다(그 메시지는 실서버가 처리하고 로컬 상태에는 반영되지 않는다).
 - 실서버 계정 상태가 실제로 바뀐다(레이스 진행 등).
 - 캐시(유료 재화) 소비 요청은 실거래로 분류되어 이 환경에서 차단된다. 상점·가챠는 서버 제공 데이터(itemTable, boxOdds)로 로컬 구현한다.

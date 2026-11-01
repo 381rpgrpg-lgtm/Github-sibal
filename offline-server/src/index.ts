@@ -15,6 +15,7 @@ import './handlers/girls.js';
 import './handlers/battle.js';
 import './handlers/shop.js';
 import './handlers/garage.js';
+import './handlers/items.js';
 
 const cfg = JSON.parse(readFileSync(new URL('../config.json', import.meta.url), 'utf8'));
 const CLIENT_DIR = new URL('../data/client/', import.meta.url).pathname;
@@ -79,7 +80,11 @@ if (upstream) console.log('[record] 기록 모드 ON: 미구현 RPC 는 실서�
 type SignCtx = { session: Session; nonce: string } | null;
 
 function json(res: ServerResponse, status: number, obj: unknown, sign: SignCtx = null) {
-  const s = JSON.stringify(obj);
+  // 클라이언트는 응답 JSON 의 `time` 으로 서버 시계(offset)를 다시 맞춘다(실서버는 모든 응답에 현재 시각을 넣는다).
+  // data/content.json·scripts.json·api-client.json 에는 내려받은 시점의 time 이 박혀 있어, 그대로 보내면 시계가
+  // 수 시간 뒤로 밀려 연료가 0 으로 계산된다(2026-11-01 실기기: 재접속 시 연료 0). → 객체 응답은 항상 현재 시각으로.
+  const body = obj && typeof obj === 'object' && !Array.isArray(obj) ? { ...(obj as object), time: Date.now() / 1000 } : obj;
+  const s = JSON.stringify(body);
   const headers: Record<string, string> = {
     'content-type': 'application/json; charset=utf-8',
     'x-content-type-options': 'nosniff',

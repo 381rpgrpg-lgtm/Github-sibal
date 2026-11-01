@@ -40,6 +40,15 @@ const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex');
 // pictureMode 함수 머리: function <name>({env:<a>=globalThis,gpu:<b>=<f>(()=>'','gpu')}={}){return
 const WARMUP_RE = /async\['warmUp'\]\([\w$]+\)\{/;
 const RENDER_RE = /\['render'\]\([\w$]+,[\w$]+,[\w$]+,[\w$]+=0x0,[\w$]+=0x0,\{yaw:[^}]*\}=\{\}\)\{/;
+// 브라우저(PWA) 뒤로가기: 원본 APK(MainActivity.onBackPressed)는 페이지에 Escape keydown/keyup 을 보내 게임의 '뒤로'를 실행한다.
+// 브라우저에서는 뒤로가기가 바로 앱을 닫으므로, history 항목 하나를 깔아 두고 popstate 때 같은 Escape 이벤트를 보낸 뒤 다시 깐다.
+const BACK_SHIM = `(function(){try{if(window.DGAndroid||window.driftGirlsAndroid||!history.pushState)return;
+var arm=function(){try{history.pushState({dgBack:1},'');}catch(e){}};
+var esc=function(){var t=document.activeElement||document.body||document.documentElement;var o={key:'Escape',code:'Escape',keyCode:27,which:27,bubbles:true,cancelable:true};
+t.dispatchEvent(new KeyboardEvent('keydown',o));t.dispatchEvent(new KeyboardEvent('keyup',o));};
+window.addEventListener('popstate',function(){esc();arm();});
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',arm);else arm();}catch(e){}})();`;
+
 // 강화·합성 3D 연출 (index-*.js). 'off' 이면 연출 없이 바로 결과 화면으로 간다.
 //   강화 결과 화면(CarUpgradeResult.IShowResult)은 effect.playing 이 꺼지면(최대 5초 대기) 결과를 표시하고,
 //   합성(CombinationEffectStart)은 연출 Promise 가 끝나면 결과 팝업을 띄우므로 바로 반환해도 흐름이 그대로다.
@@ -100,9 +109,9 @@ export function buildPatchedClient(clientDir: string, opts: PatchOptions): Patch
       + `<meta name="mobile-web-app-capable" content="yes">`
       + `<script>(function(){var A=${app};window.__dgPictureMode=A?${JSON.stringify(mode)}:'auto';`
       + `window.__dgCarFx=A?${JSON.stringify(carFx)}:'on';})();`
-      + `window.__dgGlTrace=${JSON.stringify(glTrace)};${WHERE_BEACON}${GL_TRACE}</script>`;
+      + `window.__dgGlTrace=${JSON.stringify(glTrace)};${WHERE_BEACON}${GL_TRACE}${BACK_SHIM}</script>`;
     out.files.set('index.html', Buffer.from(html.replace('<head>', '<head>' + inject), 'utf8'));
-    out.applied.push(`index.html: __dgPictureMode=${mode}, __dgCarFx=${carFx} (${opts.appOnly === false ? 'all' : 'app only'}), __dgGlTrace=${glTrace}, where-beacon, manifest`);
+    out.applied.push(`index.html: __dgPictureMode=${mode}, __dgCarFx=${carFx} (${opts.appOnly === false ? 'all' : 'app only'}), __dgGlTrace=${glTrace}, where-beacon, manifest, back-key`);
   }
 
   // 3) 매니페스트 해시·build 갱신
