@@ -1,6 +1,6 @@
 // 로컬 권위 서버 진입점. HTTP 라우팅만 (WebSocket /api/pvp 는 실시간 단계에서 추가).
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { readFileSync, existsSync, createReadStream, statSync, mkdirSync, writeFileSync } from 'node:fs';
+import { readFileSync, existsSync, createReadStream, statSync, mkdirSync, writeFileSync, appendFileSync } from 'node:fs';
 import { join, normalize } from 'node:path';
 import { SqliteStore } from './db.js';
 import { Auth, signResponse, type Session } from './auth.js';
@@ -122,6 +122,17 @@ const server = createServer(async (req, res) => {
       writeFileSync(join(DIAG_DIR, `diag-${Date.now()}.json`), body);
       console.log(`[diag] 앱 진단 기록 저장 (${body.length} bytes)`);
       return reply(200, { ok: true });
+    }
+    // 진단 보조: 클라이언트 위치 표식(where/gpu). 앱이 튕겨도 마지막 위치가 서버 로그에 남는다.
+    if (path === '/__offline/where' && method === 'POST') {
+      const body = await readBody(req);
+      try {
+        const j = JSON.parse(body);
+        console.log(`[where] ${j.k}: ${String(j.v).slice(0, 200)}`);
+        mkdirSync(DIAG_DIR, { recursive: true });
+        appendFileSync(join(DIAG_DIR, 'where.log'), `${new Date(Number(j.t) || Date.now()).toISOString()} ${j.k} ${j.v}\n`);
+      } catch { /* 무시 */ }
+      res.writeHead(204); return res.end();
     }
     if (path === '/api/login' && method === 'POST') {
       const body = JSON.parse((await readBody(req)) || '{}');

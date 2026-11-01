@@ -14,7 +14,7 @@
   "note": "upstream is used ONLY by scripts/fetch-data.mjs to pull plaintext content/scripts with your own login. The server itself never calls upstream.",
   "showNotices": false,
   "client": {
-    "pictureMode": "own",
-    "note": "차량 썸네일 렌더 방식. auto=원본 판단, own=전용 렌더러, shared=메인 렌더러 공유. Adreno 650(SM-N981N)에서 shared 가 드라이버 크래시를 일으켜 own 을 기본값으로 둔다."
+    "pictureMode": "off",
+    "note": "차량 썸네일 렌더 방식. auto=원본 판단, own=전용 렌더러, shared=메인 렌더러 공유, off=썸네일 생략. SM-N981N(Adreno 650)에서 shared 는 차고, own 은 로딩 중 크래시 → off 기본."
   }
 }

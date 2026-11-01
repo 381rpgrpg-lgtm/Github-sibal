@@ -83,4 +83,8 @@
   차량 썸네일을 메인 렌더러로 그려 읽어오는 `shared` 방식을 선택. 이 기기에서는 그 방식이 Adreno 드라이버를 죽인다.
   크래시 후 앱이 켜는 안전모드도 `shared` 조건이라 재실행해도 같은 지점에서 다시 크래시.
 - 조치: 오프라인 서버가 클라이언트를 서빙할 때 `pictureMode()` 앞에 스위치를 넣는다(`offline-server/src/clientpatch.ts`,
-  `config.json client.pictureMode`, 기본 `own`). 실기기 검증 대기.
+  `config.json client.pictureMode`). 실기기 검증 대기.
+- 1차 시도 `own`(전용 렌더러): 두 번째 로딩에서 튕김. 진단 기록은 '화면 표시 15초 후' 전송이라 미수신, 정황상
+  로딩 중 `warmUp` 이 전용 WebGL 렌더러를 만들 때 크래시(외주사가 Adreno 5xx/6xx 에 shared 를 강제한 이유로 추정).
+- 2차 조치 `off`: 차량 썸네일 렌더링을 생략(호출부는 null 을 무시하므로 썸네일만 빈다). 기본값.
+- 진단 보조: 클라이언트 위치 표식(DGAndroid.note where/gpu)을 서버 `/__offline/where` 로도 보내 `data/diag/where.log` 에 기록.
