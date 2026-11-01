@@ -80,11 +80,23 @@ register('MsgSetOptionReq', (body, ctx): Msg[] => {
   return [{ name: 'MsgSetOptionAns', body: { Result: 1 } }];
 });
 
+// 튜토리얼 단계 완료: {UserInfo:{Completion: 비트}} -> {Seq, Result 1, UserInfo[, CarInfo]}
+// 실서버 기록(2026-11-01): 요청 비트를 기존 값에 OR (1024, 16384, 917504 각각 더해짐).
+//   917504 = SlotOpenParts|ReinforceParts|AddParts 튜토리얼: 응답 CarInfo 의 현재 차량 SlotNum 1 -> 2 (튜토리얼 슬롯 무료 개방).
+const TUT_SLOT_OPEN_PARTS = 131072;
 register('MsgUpdateCompletionReq', (body, ctx): Msg[] => {
   const snap = ctx.store.getUser(ctx.session.accountId) ?? newAccountSnapshot();
-  if (snap.UserInfo && body?.Completion != null) snap.UserInfo.Completion = body.Completion;
+  const bits = Number(body?.UserInfo?.Completion ?? body?.Completion) || 0;
+  const ui = snap.UserInfo ?? (snap.UserInfo = {});
+  const before = Number(ui.Completion) || 0;
+  ui.Completion = before | bits;
+  let car: any = null;
+  if (bits & TUT_SLOT_OPEN_PARTS && !(before & TUT_SLOT_OPEN_PARTS)) {
+    car = (snap.Cars?.CarInfo ?? []).find((c: any) => Number(c.Carid) === Number(ui.Currentcar)) ?? null;
+    if (car && (Number(car.SlotNum) || 1) < 2) car.SlotNum = 2;
+  }
   ctx.store.putUser(ctx.session.accountId, snap);
-  return [{ name: 'MsgUpdateCompletionAns', body: { Result: 1, Completion: snap.UserInfo?.Completion } }];
+  return [{ name: 'MsgUpdateCompletionAns', body: { Seq: 1, Result: 1, UserInfo: ui, ...(car ? { CarInfo: car } : {}) } }];
 });
 
 // 코스메틱 '확인함' 표시: New=false 로 저장하고 갱신된 Cosmetics 를 돌려준다.
