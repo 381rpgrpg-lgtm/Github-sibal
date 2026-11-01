@@ -20,6 +20,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { register, type Msg } from '../rpc.js';
 import { grantItem, itemDef } from '../inventory.js';
+import { newOwnedCar } from '../gamecalc.js';
 
 const R_NO_CASH = 7, R_NO_COIN = 3, R_UNAVAILABLE = 8, R_OK = 1;
 const COIN_ITEM = 61001;
@@ -124,6 +125,42 @@ function partsBox(si: any, box: any, body: any, snap: any, ctx: any): Msg[] {
   }];
 }
 
+// 차량 상자 (실기록: 71026 무료 일일 상자 -> 10501 BEEMER 1, 73008 코인 상자 6900 -> 10501·10201).
+//   응답 {Result, StoreItemId, UserInfo, RewardInfo{.., CarInfo[새 차량], ContainerGrade 1}, Cost, Buycount, GachaPity, PartsPity, PartsPityHq}
+//   무료 상자: UserData.OnedayFreeShop [{StoreItemId}] 에 있고 ExipreTime 이 없거나 지났으면 무료, 사용 후 ExipreTime = +24h (실기록 형식)
+// 추정: 확률 등급(common..ultra) -> 차량 ★1..5, 그 등급에서 Distribute>0 차량 균등 추첨.
+function carBox(si: any, box: any, body: any, snap: any, ctx: any): Msg[] {
+  const id = Number(si.Id);
+  const ui = snap.UserInfo;
+  if ((snap.Cars?.CarInfo?.length ?? 0) >= Number(ui.GarageSize || 6)) {
+    console.warn(`[shop] ${id} 구매 거절: 차고 칸 부족`); return fail(R_UNAVAILABLE, id);
+  }
+  const nowS = Math.floor(Date.now() / 1000);
+  const free = (snap.OnedayFreeShop ?? []).find((x: any) => Number(x.StoreItemId) === id && !(Number(x.ExipreTime) > nowS));
+  const price = free ? { Cash: 0, Coin: 0, SocialPoint: 0 } : { Cash: Number(si.PriceCash) || 0, Coin: Number(si.PriceCoin) || 0, SocialPoint: Number(si.PriceSocialPoint) || 0 };
+  if ((Number(ui.Cash) || 0) < price.Cash) return fail(R_NO_CASH, id);
+  if ((Number(ui.Coin) || 0) < price.Coin || (Number(ui.SocialPoint) || 0) < price.SocialPoint) return fail(R_NO_COIN, id);
+  ui.Cash -= price.Cash; ui.Coin -= price.Coin; ui.SocialPoint = (Number(ui.SocialPoint) || 0) - price.SocialPoint;
+  let r = Math.random(), tier = 0;
+  for (let i = 0; i < TIERS.length; i++) { r -= Number(box.tiers?.[TIERS[i]]) || 0; if (r < 0) { tier = i; break; } }
+  const pool = [...carDefs!.values()].filter((c: any) => Number(c.Grade) === tier + 1 && Number(c.Distribute) > 0);
+  const def = pool[Math.floor(Math.random() * pool.length)] ?? carDefs!.get(10101);
+  const car = newOwnedCar(snap, Number(def.Id));
+  snap.Cars.CarInfo.push(car);
+  if (free) free.ExipreTime = nowS + 86400;
+  ctx.store.putUser(ctx.session.accountId, snap);
+  return [{
+    name: 'MsgBuyProductAns',
+    body: {
+      Seq: 1, Result: R_OK, StoreItemId: id, UserInfo: ui,
+      RewardInfo: { Coin: 0, Charexp: 0, Cash: 0, Familiartity: 0, ItemInfo: [], CarInfo: [car], ContainerGrade: 1 },
+      Cost: { Cash: price.Cash, Coin: price.Coin, SocialPoint: price.SocialPoint, Token: 0, GoldCash: 0 }, Buycount: Number(body?.Buycount) || 1,
+      GachaPity: snap.GachaPity, PartsPity: snap.PartsPity, PartsPityHq: snap.PartsPityHq,
+      ...(snap.OnedayFreeShop ? { OnedayFreeShop: snap.OnedayFreeShop } : {}),
+    },
+  }];
+}
+
 const fail = (Result: number, StoreItemId: number): Msg[] => [{ name: 'MsgBuyProductAns', body: { Seq: 1, Result, StoreItemId } }];
 
 register('MsgBuyProductReq', (body, ctx): Msg[] => {
@@ -136,7 +173,8 @@ register('MsgBuyProductReq', (body, ctx): Msg[] => {
   const reason = (why: string) => { console.warn(`[shop] ${id} 구매 거절: ${why}`); return fail(R_UNAVAILABLE, id); };
   if (si.GachaId) {
     const box = boxOdds?.boxes?.[String(id)];
-    if (!box || !Number(box.maxPartGrade)) return reason('차량 가챠는 오프라인 미지원(기록 없음)');
+    if (!box) return reason('상자 확률표 없음');
+    if (!Number(box.maxPartGrade)) return carBox(si, box, body, snap, ctx);
     return partsBox(si, box, body, snap, ctx);
   }
   const price = { Coin: Number(si.PriceCoin) || 0, Cash: Number(si.PriceCash) || 0, SocialPoint: Number(si.PriceSocialPoint) || 0, Token: Number(si.PriceToken) || 0 };

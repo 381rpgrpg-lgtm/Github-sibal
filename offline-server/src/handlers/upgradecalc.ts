@@ -52,7 +52,8 @@ export function upgradePreview(snap: any, car: any, sources: any[]):
   const Attributes: any = { ...(car.Attributes ?? {}) };
   for (const k of ATTRS) Attributes[k] = (Number(Attributes[k]) || 0) + add;
   return {
-    exp, cost: Math.round(exp * costPerExp(grade)), bonus: 6 * sources.length,
+    // 확률 보너스: 대상 ★1 재료당 6, ★2 재료당 4.5 (실측). 그 위는 0.75배씩 (추정)
+    exp, cost: Math.round(exp * costPerExp(grade)), bonus: 6 * 0.75 ** (grade - 1) * sources.length,
     expected: { UpgradeLevel: lv, CarExp: carExp, Attributes },
   };
 }

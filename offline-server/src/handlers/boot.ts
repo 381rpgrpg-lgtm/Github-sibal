@@ -3,6 +3,7 @@
 // 시드도 없으면 신규계정 최소 스냅샷을 사용한다.
 import { readFileSync, existsSync } from 'node:fs';
 import { register, type Ctx, type Msg } from '../rpc.js';
+import { refreshQuests } from '../quests.js';
 
 const SEED = new URL('../../data/userdata-seed.json', import.meta.url).pathname;
 
@@ -64,6 +65,8 @@ register('MsgLoginReq', (_body, ctx): Msg[] => {
   const base = loadSnapshot(ctx);
   dailyGift(base, ctx);
   if (base.UserInfo) delete base.UserInfo.LevelUp;
+  refreshQuests(base); // 조건이 맞는 퀘스트를 제시 상태로 (실계정 로그인 데이터에도 State 2 퀘스트가 들어 있음)
+  ctx.store.putUser(ctx.session.accountId, base);
   // 이벤트 공지 팝업(로그인마다 재표시)은 오프라인 기본값에서 끈다. config.showNotices=true 로 켬.
   if (!ctx.showNotices && base.NoticeInfo) base.NoticeInfo = { ...base.NoticeInfo, Notice: [] };
   const snap = applyCheat(base, ctx.cheat);
@@ -96,8 +99,15 @@ register('MsgUpdateCompletionReq', (body, ctx): Msg[] => {
     car = (snap.Cars?.CarInfo ?? []).find((c: any) => Number(c.Carid) === Number(ui.Currentcar)) ?? null;
     if (car && (Number(car.SlotNum) || 1) < 2) car.SlotNum = 2;
   }
+  // 튜토리얼 단계 완료 보상 (실기록: 128 UseInventory 300코인, 2048 Memory 300코인, 1048576 CarPerformance 500코인.
+  //   1024·16384·917504 는 보상 없음. 나머지 단계는 기록 없음 -> 보상 없음)
+  const REWARD: Record<number, number> = { 128: 300, 2048: 300, 1048576: 500 };
+  let coin = 0;
+  for (const [bit, c] of Object.entries(REWARD)) if (bits & Number(bit) && !(before & Number(bit))) coin += c;
+  if (coin) ui.Coin = (Number(ui.Coin) || 0) + coin;
   ctx.store.putUser(ctx.session.accountId, snap);
-  return [{ name: 'MsgUpdateCompletionAns', body: { Seq: 1, Result: 1, UserInfo: ui, ...(car ? { CarInfo: car } : {}) } }];
+  return [{ name: 'MsgUpdateCompletionAns', body: { Seq: 1, Result: 1, UserInfo: ui, ...(car ? { CarInfo: car } : {}),
+    ...(coin ? { RewardInfo: { Coin: coin, Cash: 0, Charexp: 0, ItemInfo: [{ Itemtype: 61001, Count: coin, DeltaNum: coin }], CarInfo: [] } } : {}) } }];
 });
 
 // 코스메틱 '확인함' 표시: New=false 로 저장하고 갱신된 Cosmetics 를 돌려준다.

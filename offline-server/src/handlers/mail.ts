@@ -21,12 +21,19 @@ register('MsgGetMailItemReq', (body, ctx): Msg[] => {
   const want = body?.Mail ?? {};
   const keep: any[] = [];
   let got = 0;
+  const deltas: any[] = [];
   for (const m of snap.MailBox?.Mail ?? []) {
     const hit = want.MailId !== undefined ? Number(m.MailId) === Number(want.MailId)
       : want.BoxType !== undefined ? Number(m.BoxType ?? 0) === Number(want.BoxType) : false;
     if (!hit) { keep.push(m); continue; }
     if (m.Itemtype && m.Itemnum) {
-      if (!grantItem(snap, Number(m.Itemtype), Number(m.Itemnum))) {
+      const ok = grantItem(snap, Number(m.Itemtype), Number(m.Itemnum));
+      if (ok) {
+        const it = (snap.Items?.ItemInfo ?? []).find((x: any) => Number(x.Itemtype) === Number(m.Itemtype));
+        deltas.push(it ? { Itemid: it.Itemid, Itemtype: Number(m.Itemtype), Count: it.Count, StackNum: it.Count, DeltaNum: Number(m.Itemnum) }
+          : { Itemtype: Number(m.Itemtype), Count: Number(m.Itemnum), DeltaNum: Number(m.Itemnum) });
+      }
+      if (!ok) {
         console.warn(`[mail] 아이템 정의 없음: Itemtype ${m.Itemtype} x${m.Itemnum} (우편은 보관)`);
         keep.push(m);
         continue;
@@ -39,12 +46,13 @@ register('MsgGetMailItemReq', (body, ctx): Msg[] => {
   return [{
     name: 'MsgGetMailItemAns',
     body: {
+      // 실기록 형식: {Result, UserInfo, MailBox, SocialBox, ItemInfo[{Itemid, Itemtype, Count, StackNum, DeltaNum}], GetMailStatus}
       Result: got > 0 ? 1 : 0,
-      GetMailStatus: got > 0 ? 1 : 0,
+      UserInfo: snap.UserInfo,
       MailBox: snap.MailBox,
       SocialBox: box(snap.SocialBox),
-      Items: snap.Items,
-      UserInfo: snap.UserInfo,
+      ItemInfo: deltas,
+      GetMailStatus: got > 0 ? 1 : 0,
     },
   }];
 });

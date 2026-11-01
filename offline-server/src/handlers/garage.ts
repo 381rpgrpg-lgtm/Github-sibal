@@ -19,6 +19,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { register, type Msg } from '../rpc.js';
 import { bumpProperty } from './battle.js';
+import { questEvent } from '../quests.js';
 import { carLevelRow, carDef, upgradePreview } from './upgradecalc.js';
 
 const TUT_REINFORCE_CAR = 8192;
@@ -56,6 +57,7 @@ register('MsgUpgradeCarReq', (body, ctx): Msg[] => {
     const removedParts = (snap.Items?.ItemInfo ?? []).filter((it: any) => ids.has(Number(it.Equipcarid)));
     if (removedParts.length) snap.Items.ItemInfo = snap.Items.ItemInfo.filter((it: any) => !removedParts.includes(it));
     bumpProperty(snap, 'DQUEST_PARTSUP', 1);
+    questEvent(snap, 17, () => true); // 퀘스트: 차량 n회 강화
     ctx.store.putUser(ctx.session.accountId, snap);
     return [{ name: 'MsgUpgradeCarAns', body: {
       Seq: 1, Result: R_OK, UpgradeSuccess: true, ResultCarInfo: { ...car, CarEffect: car.CarEffect ?? [] }, UserInfo: ui,

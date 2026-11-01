@@ -12,6 +12,8 @@
 //   이미 부품이 있는 칸에 장착할 때 기존 부품을 무료로 빼는 동작, 퀘스트 목표 진행도 갱신(미구현).
 import { readFileSync, existsSync } from 'node:fs';
 import { register, type Msg } from '../rpc.js';
+import { updateQuest, refreshQuests } from '../quests.js';
+import { levelUp } from './battle.js';
 
 const TABLES = new URL('../../data/tables/', import.meta.url).pathname;
 const load = (n: string) => (existsSync(TABLES + n) ? JSON.parse(readFileSync(TABLES + n, 'utf8')) : null);
@@ -27,7 +29,7 @@ function init() {
 const TUT_EQUIP_PARTS = 65536;
 // 슬롯 비용 (실측): ★1 차량 슬롯 2 = 100코인, ★2 차량 슬롯 2 = 200코인. 최대 슬롯은 cars.json Slot(★1 2, ★2 3).
 //   ★1 슬롯 3 요청은 실서버 Result 2. 그 외 조합(슬롯 3 이상, ★3 이상)은 실측 없음 -> 거절.
-const SLOT_COST: Record<string, { Coin?: number; Cash?: number }> = { '1|2': { Coin: 100 }, '2|2': { Coin: 200 } };
+const SLOT_COST: Record<string, { Coin?: number; Cash?: number }> = { '1|2': { Coin: 100 }, '2|2': { Coin: 200 }, '2|3': { Coin: 400 } }; // ★2 슬롯 3 = 400 (실측)
 import { carDef } from './upgradecalc.js';
 const slotCost = (car: any, slot: number) => {
   const max = Number(carDef(car.Cartype)?.Slot) || 2;
@@ -83,11 +85,12 @@ register('MsgEquipPartsReq', (body, ctx): Msg[] => {
     changed.push(part);
     ui.Completion = Number(ui.Completion) | TUT_EQUIP_PARTS;
   }
+  const qch = refreshQuests(snap);
   ctx.store.putUser(ctx.session.accountId, snap);
   return [{
     name: 'MsgChangeParts',
     body: { Seq: 1, Result: 1, ItemInfo: changed, UserInfo: ui, ...(car ? { CarInfo: withEffect(car) } : {}) },
-  }];
+  }, ...(qch.length ? [{ name: 'MsgUpdateNquest', body: { Seq: 2, NquestInfo: qch } }] : [])];
 });
 
 register('MsgCarSlotCostReq', (body, ctx): Msg[] => {
@@ -119,18 +122,9 @@ register('MsgCarSlotOpenReq', (body, ctx): Msg[] => {
 });
 
 register('MsgUpdateNquestReq', (body, ctx): Msg[] => {
-  init();
   const snap = ctx.store.getUser(ctx.session.accountId);
-  const id = Number(body?.NquestInfo?.QuestId), state = Number(body?.NquestInfo?.State);
-  const def = quests!.get(id);
-  if (!snap || !def) return [{ name: 'MsgUpdateNquestAns', body: { Seq: 1, Result: 2, RequestedQuestId: id, RequestedState: state } }];
-  snap.NquestInfos ??= { NquestInfo: [], Version: 1 };
-  const list: any[] = snap.NquestInfos.NquestInfo ??= [];
-  let q = list.find((x) => Number(x.QuestId) === id);
-  if (!q) {
-    q = { QuestId: id, State: state, Objective: (def.Objective ?? []).map((o: any) => ({ ObjId: o.ObjId, CurrentValue: 0, CompleteCash: Number(o.Cash) || 0, CashCleared: false })) };
-    list.push(q);
-  } else q.State = state;
+  if (!snap) return [{ name: 'MsgUpdateNquestAns', body: { Seq: 1, Result: 2 } }];
+  const out = updateQuest(snap, Number(body?.NquestInfo?.QuestId), Number(body?.NquestInfo?.State), levelUp);
   ctx.store.putUser(ctx.session.accountId, snap);
-  return [{ name: 'MsgUpdateNquestAns', body: { Seq: 1, Result: 1, RequestedQuestId: id, RequestedState: state, NquestInfo: [q] } }];
+  return [{ name: 'MsgUpdateNquestAns', body: { Seq: 1, ...out } }];
 });

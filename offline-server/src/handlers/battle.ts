@@ -17,6 +17,10 @@
 // 추정(기록 없음): 등급 판정 기준(S: 미스·배드 0 / A: 미스 0 / B: 그 외), 보너스를 하나씩 받을 때의 금액 배분
 import { readFileSync, existsSync } from 'node:fs';
 import { register, type Msg, type Ctx } from '../rpc.js';
+import { grantItem } from '../inventory.js';
+import { ensureGirl, newGirlRecord } from './girls.js';
+import { refreshQuests, questEvent } from '../quests.js';
+import { table as gtable, areaOf, areaRace, finalAttr, makeOpponent, newOwnedCar, randomPart, grantPart, carDefOf, relativeDifficulty } from '../gamecalc.js';
 
 const ST = { PLAYABLE: 1, CLEAR: 2, FAIL: 4, LOCKED: 8, WIN: 16 } as const;
 const TUT_INFO_FIRST_GIRL = 512;
@@ -70,12 +74,6 @@ export function bumpProperty(snap: any, name: string, by: number) {
   else snap.PropertySet.Property.push({ PropertyName: name, Nvalue: by });
 }
 
-function withFinalAttr(car: any) {
-  const a = car.Attributes ?? {}, m = car.MasteryAttr ?? {};
-  const FinalAttr: any = {};
-  for (const k of ['AttribMaxSpd', 'AttribAcc', 'AttribStability', 'AttribDrift']) FinalAttr[k] = (a[k] || 0) + (m[k] || 0);
-  return { ...car, FinalAttr };
-}
 
 // 레벨업. 기록(2026-11-01, 데이트 결과로 Lv1 -> 2): Charexp 는 다음 레벨 기준으로 다시 센다(214+27=241 -> Lv2, Charexp 5 = 241-236),
 //   Fuelvalue = 새 레벨 Gasoline(418), Fueltime = 지금(연료 가득), UserInfo.LevelUp {Level, FuelMax, Coin 0, Cash 2},
@@ -102,6 +100,17 @@ export function levelUp(snap: any) {
   }
 }
 
+// 스토리 대본 이름 (실기록): 시작 EP<존2자리><순번2자리>Start (순번 = RaceIndex-10), 보스 EP<존>BossStart,
+//   첫 승리 EP..Win / EP<존>BossWin. 대본 데이터가 없으면 클라이언트가 건너뛴다.
+const epName = (zone: number, race: any, kind: 'Start' | 'Win') => {
+  const z = String(zone).padStart(2, '0');
+  if (race.Boss) return `EP${z}Boss${kind}`;
+  const n = Number(race.RaceIndex) - 10;
+  return n >= 1 && n <= 9 ? `EP${z}${String(n).padStart(2, '0')}${kind}` : null;
+};
+const isGirlRace = (race: any) => !!race.UnlockGirlInfo || Number(areaRace(race.ZoneId, race.RaceIndex)?.RaceType) === 7;
+const TUT_UNLOCK_RACE = 4096;
+
 register('MsgBattleStartReq', (body, ctx: Ctx): Msg[] => {
   const snap = ctx.store.getUser(ctx.session.accountId);
   const { race } = findRace(snap ?? {}, body?.ZoneId, body?.BattleId);
@@ -116,22 +125,67 @@ register('MsgBattleStartReq', (body, ctx: Ctx): Msg[] => {
     spendFuel(ui, cost);
   }
   if (Number(ui.Completion) & TUT_FIRST_SELECT) ui.Completion = Number(ui.Completion) | TUT_INFO_FIRST_GIRL;
+  // 캐릭터 레이스 시작 시 UnlockRace 튜토리얼 비트 (실기록: 2-25 시작 응답에서 Completion |= 4096)
+  if (isGirlRace(race)) ui.Completion = Number(ui.Completion) | TUT_UNLOCK_RACE;
   race.TryCount = (Number(race.TryCount) || 0) + 1;
   ctx.store.setMeta(`battle:${ctx.session.accountId}`, JSON.stringify({ zone: body.ZoneId, race: body.BattleId, level: body.RaceLevel ?? 1, at: now() }));
   ctx.store.putUser(ctx.session.accountId, snap);
   const forceWin = !!(ctx.cheat.enabled && ctx.cheat.forceWinBattles);
+  const girlRace = isGirlRace(race);
+  const ep = girlRace ? null : epName(Number(body.ZoneId), race, 'Start');
+  const fa = finalAttr(girlRace ? { ...snap, UserInfo: { ...ui, PassengerGirl: -1 } } : snap, car);
   return [{
     name: 'MsgBattleStartAns',
     body: {
-      Seq: 1, Result: 1, UserInfo: ui, NitroReadyNum: 0, Passenger: ui.PassengerGirl ?? 0, GirlsSpecialSkill: [],
+      Seq: 1, Result: 1, UserInfo: ui, NitroReadyNum: 0, Passenger: girlRace ? -1 : ui.PassengerGirl ?? 0, GirlsSpecialSkill: [],
       RaceInfo: race, RaceType: body.RaceType ?? 1, ZoneId: body.ZoneId, BattleId: body.BattleId,
-      Track: { ...(track(race.Track?.TrackId) ?? {}), ClosedTrack: false, Thema: race.Track?.Thema, LightingIndex: race.Track?.LightingIndex ?? 0 },
-      MyCarInfo: withFinalAttr(car), OpponentCarInfo: race.OpponentCarInfo, Boss: 0, ForceWin: forceWin, MyPosition: 0,
-      RaceLevel: body.RaceLevel ?? 1, RelativeDifficulty: 1, NewCollections: { Collection: [] },
+      // 시작 응답 Track = trackTable 전체 + (보스 외) ClosedTrack + Thema/LightingIndex (실기록 2-12, 2-20)
+      Track: { ...(track(race.Track?.TrackId) ?? {}), ...(race.Boss ? {} : { ClosedTrack: false }), Thema: race.Track?.Thema, LightingIndex: race.Track?.LightingIndex ?? 0 },
+      MyCarInfo: { ...car, FinalAttr: fa },
+      OpponentCarInfo: race.OpponentCarInfo, Boss: Number(race.Boss) || 0, ForceWin: forceWin, MyPosition: 0,
+      RaceLevel: body.RaceLevel ?? 1, RelativeDifficulty: relativeDifficulty(fa, race.OpponentCarInfo),
+      ...(girlRace ? { NewGirl: Number(race.UnlockGirlInfo?.Girlid) } : {}),
+      ...(ep ? { CallScript: [{ Name: ep, Girlid: 0, FmLevel: -1 }] } : {}),
       ReplaySeed: Math.floor(Math.random() * 2 ** 31),
     },
   }];
 });
+
+// 새로 열리는 레이스 준비: 첫 플레이 보상 표시(FirstPlayRewardItemID 가 있으면 true),
+//   레이스 칸에 미리 정해 두는 소액 보상 ItemInfo (실기록: 61001 코인 90, 61005 숙련도 2. 출현 확률·종류 표는 미확인 -> 추정 50%).
+function openRace(zoneId: number, race: any) {
+  race.State = ST.PLAYABLE;
+  race.FirstPlayReward = !!areaRace(zoneId, race.RaceIndex)?.FirstPlayRewardItemID;
+  race.TryCount = Number(race.TryCount) || 0;
+  if (!race.Boss && !isGirlRace(race) && Math.random() < 0.5) {
+    race.ItemInfo = Math.random() < 0.5 ? { Itemtype: 61001, Count: 90 } : { Itemtype: 61005, Count: 2 };
+  }
+}
+
+// 존 해금 시 캐릭터 레이스(battleTable RaceType 7, GirlId) 생성. 실기록 존 3: RaceId 50<존><순번>, RewardCoin 0,
+//   UnlockGirlInfo {Girlid}, State 8, 상대 = Difficulty 기준 차량, RewardXP = round(30 + Difficulty/20) (실기록 6건 일치), 순번 역순.
+function ensureGirlRaces(zone: any): any[] {
+  const out: any[] = [];
+  const first = [...(zone.Race ?? [])].sort((a: any, b: any) => a.RaceIndex - b.RaceIndex)[0];
+  const defs = [...(areaOf(zone.ZoneId)?.Race ?? [])].filter((ar: any) => Number(ar.RaceType) === 7 && ar.GirlId)
+    .sort((a: any, b: any) => b.RaceIndex - a.RaceIndex);
+  for (const ar of defs) {
+    let r = zone.Race.find((x: any) => Number(x.RaceIndex) === Number(ar.RaceIndex));
+    if (!r) {
+      r = {
+        RaceId: 5000000 + Number(zone.ZoneId) * 100 + Number(ar.RaceIndex), State: ST.LOCKED, StateHard: ST.LOCKED, StateVHard: ST.LOCKED,
+        PosId: Number(ar.RacePos) || 1, ZoneId: zone.ZoneId, RaceLifeType: 1, RaceMode: 1, RaceIndex: Number(ar.RaceIndex),
+        RewardCoin: 0, RewardXP: Math.round(30 + (Number(ar.Opponent?.Difficulty) || 400) / 20), RewardFamiliarity: 10,
+        OpponentCarInfo: makeOpponent(Number(ar.Opponent?.Difficulty) || 400),
+        Track: { TrackId: Number(ar.TrackId) || 99, Attrs: track(ar.TrackId)?.Attrs ?? {}, Thema: first?.Track?.Thema ?? 1, LightingIndex: 0 },
+        FirstPlayReward: false, TryCount: 0, UnlockGirlInfo: { Girlid: Number(ar.GirlId) },
+      };
+      zone.Race.push(r);
+    }
+    out.push(r);
+  }
+  return out;
+}
 
 register('MsgBattleResultReq', (body, ctx: Ctx): Msg[] => {
   const snap = ctx.store.getUser(ctx.session.accountId);
@@ -139,24 +193,31 @@ register('MsgBattleResultReq', (body, ctx: Ctx): Msg[] => {
   const car = snap && currentCar(snap);
   if (!snap || !zone || !race || !car) return [{ name: 'MsgBattleResultAns', body: { Seq: 1, Result: 0 } }];
   const ui = snap.UserInfo;
-  const win = !!body.IsPlayerWin || !!(ctx.cheat.enabled && ctx.cheat.forceWinBattles);
-  const changed: any[] = [race];
-  const newRaces: any[] = [];
-  let deltaProgress = 0;
+  // 기권: 실클라이언트 withdrawRace 요청 {Withdraw:true, IsPlayerWin:false}. 실기록: 경험치 패배 몫, 친밀도 +, 기록 0.
+  const withdraw = !!body.Withdraw;
+  const win = !withdraw && (!!body.IsPlayerWin || !!(ctx.cheat.enabled && ctx.cheat.forceWinBattles));
+  const girlRace = isGirlRace(race);
+  const boss = !!race.Boss;
+  const firstWin = win && !(race.State & ST.WIN);
+  const zoneEntries: any[] = [];
+  const main: any = { ZoneId: zone.ZoneId, ChangeRace: [race] };
+  zoneEntries.push(main);
 
-  // 보상
-  const baseCoin = Number(race.RewardCoin) || 0;
-  const raceCoin = win ? baseCoin : 0;
-  // 등급 보너스 (승리 시)
+  // 코인: 기본(RewardCoin) + 남은 부스트 보상(LeftBoost x RewardCoin x 0.3, 실기록 1 x 180)
+  const baseCoin = win ? Number(race.RewardCoin) || 0 : 0;
+  const boostComp = win ? (Number(body.LeftBoost) || 0) * Math.trunc((Number(race.RewardCoin) || 0) * 0.3) : 0;
+  const raceCoin = baseCoin + boostComp;
+
+  // 등급 보너스 (실기록 12건: 처음 S = S·A·B 보너스 → 코인 1600 + 캐시 1. 보스·캐릭터 레이스는 0)
   let clearTop: any = null, bonusCoin = 0, bonusCash = 0;
   if (win) {
     const miss = Number(body.MissCnt) || 0, bad = Number(body.BadCnt) || 0;
-    const grade = miss === 0 && bad === 0 ? 1 : miss === 0 ? 2 : 3; // 1=S 2=A 3=B (추정 기준)
+    const grade = miss === 0 && bad === 0 ? 1 : miss === 0 ? 2 : 3; // 1=S 2=A 3=B (추정 기준: 기록은 모두 S)
     const prev = race.ClearRec ?? {};
-    const earned = [1, 2, 4].filter((b, i) => i + 1 >= grade).reduce((a, b) => a | b, 0); // S면 S|A|B
+    const earned = [1, 2, 4].filter((_, i) => i + 1 >= grade).reduce((a, b) => a | b, 0);
     const fresh = earned & ~(Number(prev.Bonus) || 0);
     const n = [1, 2, 4].filter((b) => fresh & b).length;
-    bonusCoin = Math.round((1600 * n) / 3); bonusCash = Math.round((2 * n) / 3); // 기록: 3개 = 1600 / 2
+    if (Number(race.RewardCoin) > 0) { bonusCoin = Math.round((1600 * n) / 3); bonusCash = n === 3 ? 1 : 0; }
     const bestBit = 1 << (grade - 1);
     const prevBest = Number(prev.Flag) || 0;
     race.ClearRec = {
@@ -169,106 +230,226 @@ register('MsgBattleResultReq', (body, ctx: Ctx): Msg[] => {
       RewardInfo: { Coin: bonusCoin, Charexp: 0, Cash: bonusCash, Familiartity: 0, ItemInfo: [], CarInfo: [] },
     };
   }
-  const coin = raceCoin + bonusCoin;
+
+  // 보스 보상 (실기록: 1-20 코인 2000 + 차량 10101, 2-20 코인 2100 + 차량 10201). 추정: 1900+100x존, ★1 차량 무작위.
+  let bossCoin = 0;
+  const rewardCars: any[] = [];
+  if (win && boss && firstWin) {
+    bossCoin = 1900 + 100 * Number(zone.ZoneId);
+    const ones = (gtable('cars.json')?.Car ?? []).filter((c: any) => Number(c.Grade) === 1 && Number(c.Distribute) > 0);
+    const pick = ones[Math.floor(Math.random() * ones.length)];
+    if (pick && (snap.Cars?.CarInfo?.length ?? 0) < Number(ui.GarageSize || 6)) {
+      const c = newOwnedCar(snap, Number(pick.Id));
+      snap.Cars.CarInfo.push(c); rewardCars.push(c);
+    }
+  }
+
+  const coin = raceCoin + bonusCoin + bossCoin;
   ui.Cash = (Number(ui.Cash) || 0) + bonusCash;
   const xp = win ? Number(race.RewardXP) || 0 : Math.floor((Number(race.RewardXP) || 0) * 0.3);
-  const fam = Number(race.RewardFamiliarity) || 0;
+  const passengerOn = !girlRace;
+  const fam = passengerOn ? Number(race.RewardFamiliarity) || 0 : 0;
   ui.Coin = (Number(ui.Coin) || 0) + coin;
   ui.Charexp = (Number(ui.Charexp) || 0) + xp;
   delete ui.LevelUp;
   levelUp(snap);
 
   // 레이스 상태
+  let deltaProgress = 0;
+  const extra: any = {};
   if (win) {
-    const firstWin = !(race.State & ST.WIN);
-    race.State = (race.State & ~(ST.FAIL | ST.PLAYABLE)) | ST.CLEAR | ST.WIN;
-    if (Number(body.RaceLevel ?? 1) === 1 && race.StateHard & ST.LOCKED) race.StateHard = ST.PLAYABLE;
-    if (firstWin) {
+    race.State = boss ? (race.State & ~(ST.FAIL | ST.PLAYABLE | ST.CLEAR)) | ST.WIN   // 보스: 16 (보상 수령 단계 없음)
+      : (race.State & ~(ST.FAIL | ST.PLAYABLE)) | ST.CLEAR | ST.WIN;                    // 일반·캐릭터: 18
+    if (Number(body.RaceLevel ?? 1) === 1 && race.StateHard & ST.LOCKED && !boss) race.StateHard = ST.PLAYABLE;
+    if (firstWin && !boss && !girlRace) {
       deltaProgress = 10;
       zone.Progress = (Number(zone.Progress) || 0) + deltaProgress;
-      const order = [...zone.Race].filter((r: any) => Number(r.RaceLifeType ?? 1) === 1)
+      // 보상 상자: FirstPlayReward 가 없는 레이스는 존 Box1 확률로 부품 상자 (실기록 2-12, 존 2 Box1 0.51)
+      if (!race.FirstPlayReward && Math.random() < (Number(areaOf(zone.ZoneId)?.Box1) || 0)) race.RewardBoxKind = 1;
+      const order = [...zone.Race].filter((r: any) => !isGirlRace(r) && !r.Boss && Number(r.RaceIndex) < 20)
         .sort((a: any, b: any) => a.RaceIndex - b.RaceIndex);
-      const next = order[order.indexOf(race) + 1];
-      if (next && next.State & ST.LOCKED) { next.State = ST.PLAYABLE; newRaces.push(next); }
-      if (!next) { // 존 마지막(보스) 승리 → 다음 존 해금
-        const zones = snap.RaceZones.RaceZone;
-        const nz = zones.find((z: any) => Number(z.ZoneId) === Number(zone.ZoneId) + 1);
-        if (nz && nz.Locked) {
-          nz.Locked = false;
-          const first = [...nz.Race].sort((a: any, b: any) => a.RaceIndex - b.RaceIndex)[0];
-          if (first) { first.State = ST.PLAYABLE; }
+      const next = order[order.indexOf(race) + 1] ?? zone.Race.find((r: any) => r.Boss);
+      main.NewRace = [];
+      if (next && next.State & ST.LOCKED) { openRace(zone.ZoneId, next); main.NewRace.push(next); }
+      // 캐릭터 레이스: 같은 존 13번 승리 후 열림 (실기록 2-13 -> 2-25. 다른 존은 추정)
+      if (Number(race.RaceIndex) === 13) {
+        const girls = ensureGirlRaces(zone).filter((r: any) => r.State & ST.LOCKED);
+        const nodes: any[] = [];
+        for (const g of girls) {
+          g.State = ST.PLAYABLE;
+          g.UnlockGirlInfo = { Girlid: Number(g.UnlockGirlInfo?.Girlid), State: 6 };
+          // 관계도 노드를 '해금 가능'(6)으로 (실기록 2-13 승리: Gnode State 6, GirlInfo State 6)
+          const node = (snap.Ggraph?.Gnode ?? []).find((n: any) => Number(n.GirlInfo?.Girlid) === Number(g.UnlockGirlInfo.Girlid));
+          if (node && Number(node.State) !== 7) {
+            node.State = 6;
+            node.GirlInfo = { ...newGirlRecord(Number(g.UnlockGirlInfo.Girlid)), Familiarity: 0, NextCoin: 100, State: 6, UnlockCritFlag: 1 };
+            nodes.push(node);
+          }
         }
+        if (girls.length) zoneEntries.push({ ZoneId: zone.ZoneId, ChangeRace: girls });
+        if (nodes.length) extra.GgraphPatch = { Gnode: nodes };
+      }
+      main.Progress = zone.Progress; main.DeltaProgress = deltaProgress;
+    }
+    if (firstWin && girlRace) {
+      // 캐릭터 해금 (실기록 2-25: UnlockGirlInfo 전체, NewGirl, GgraphPatch, DelRace, Completion |= 4096)
+      const gid = Number(race.UnlockGirlInfo?.Girlid ?? areaRace(zone.ZoneId, race.RaceIndex)?.GirlId);
+      const g = ensureGirl(snap, gid);
+      Object.assign(g, { Familiarity: 0, NextCoin: 100, UnlockCritFlag: 1 });
+      race.UnlockGirlInfo = { Girlid: gid, State: 6 };
+      const node = (snap.Ggraph?.Gnode ?? []).find((n: any) => Number(n.GirlInfo?.Girlid) === gid);
+      if (node) { node.State = 7; node.GirlInfo = g; }
+      extra.UnlockGirlInfo = g; extra.NewGirl = gid; extra.GgraphPatch = { Gnode: node ? [node] : [] };
+      main.NewRace = []; main.Progress = zone.Progress; main.DeltaProgress = 0;
+      zoneEntries.push({ ZoneId: zone.ZoneId, DelRace: [structuredClone(race)] });
+      zone.Race = zone.Race.filter((r: any) => r !== race);
+    }
+    if (firstWin && boss) {
+      main.NewRace = []; main.BossCleared = true; main.Progress = zone.Progress; main.DeltaProgress = 0;
+      // 실기록: 에피소드 2 보스 클리어 응답에서 SystemOpenFlag 4096 -> 4097 (주간 레이스 개방 WRaceOpen=3 시점과 일치, 의미는 추정)
+      // 실기록: 에피소드 1 보스 클리어 응답에서 Completion 에 EpisodeProgress(2097152)
+      if (Number(zone.ZoneId) === 1) ui.Completion = Number(ui.Completion) | 2097152;
+      if (Number(zone.ZoneId) === 2) { ui.SystemOpenFlag = Number(ui.SystemOpenFlag) | 1; ui.FightTicket ??= 10; } // 실기록: FightTicket 10 등장
+      const nz = snap.RaceZones.RaceZone.find((z: any) => Number(z.ZoneId) === Number(zone.ZoneId) + 1);
+      if (nz && nz.Locked) {
+        nz.Locked = false; nz.Progress = 0;
+        const first = [...nz.Race].filter((r: any) => !isGirlRace(r)).sort((a: any, b: any) => a.RaceIndex - b.RaceIndex)[0];
+        for (const r of nz.Race) if (!isGirlRace(r)) r.FirstPlayReward = !!areaRace(nz.ZoneId, r.RaceIndex)?.FirstPlayRewardItemID;
+        if (first) openRace(nz.ZoneId, first);
+        const girls = ensureGirlRaces(nz);
+        zoneEntries.push({ ...nz, IsNew: true });
+        for (const g of girls) zoneEntries.push({ ZoneId: nz.ZoneId, NewRace: [g] });
       }
     }
+    const ep = !girlRace && firstWin ? epName(Number(zone.ZoneId), race, 'Win') : null;
+    if (ep) extra.CallScript = [{ Name: ep, Girlid: 0, FmLevel: -1 }];
   } else {
     race.State = race.State | ST.FAIL;
-    ui.Completion = Number(ui.Completion) | TUT_LOSE_RACE;
+    if (!withdraw) ui.Completion = Number(ui.Completion) | TUT_LOSE_RACE;
   }
 
   // 동승 캐릭터 친밀도
   const updateGirl: any[] = [];
-  const passenger = (snap.MyGirls?.MyGirlInfo ?? []).find((g: any) => Number(g.Girlid) === Number(ui.PassengerGirl));
+  const passenger = passengerOn ? (snap.MyGirls?.MyGirlInfo ?? []).find((g: any) => Number(g.Girlid) === Number(ui.PassengerGirl)) : null;
   if (passenger && fam) { passenger.Familiarity = (Number(passenger.Familiarity) || 0) + fam; updateGirl.push(passenger); }
 
+  // 결과 응답 FinalAttr 은 이번 숙련도 증가 전 값 (실기록: MasteryAttr 은 새 값, FinalAttr 은 이전 값 기준)
+  const faBefore = finalAttr(girlRace ? { ...snap, UserInfo: { ...ui, PassengerGirl: -1 } } : snap, car);
   // 차량 숙련도 (패배 +1, 승리 +2)
   car.DeltaMastery = 0;
-  for (let i = 0; i < (win ? 2 : 1) && (Number(car.Mastery) || 0) < (Number(car.MasteryCapacity) || 0); i++) {
+  addMastery(car, win ? 2 : withdraw ? 0 : 1);
+  if (win) bumpProperty(snap, 'DQUEST_RACE', 1); // 일일 미션 '레이스 3회 승리' (기록 0 -> 1)
+  // 퀘스트 사건: 6 = 그 캐릭터를 태우고 레이스 n회, 2(순번 없음) = 존 승리 + 탑승 캐릭터, 30 = 히로인 드라이브
+  if (!withdraw) {
+    const pg = passengerOn ? Number(ui.PassengerGirl) : -1;
+    questEvent(snap, 6, (p) => Number(p[1]) === pg);
+    if (win) questEvent(snap, 2, (p) => !p[2] && Number(p[1]) === Number(zone.ZoneId) && (!p[4] || Number(p[4]) === pg));
+    if (body.IsHeroineDrive) questEvent(snap, 30, (p) => Number(p[1]) === pg);
+  }
+  const questChanges = refreshQuests(snap);
+
+  // LevelUp 은 다음 레이스 결과까지 UserInfo 에 남는다 (실기록: 2-12 결과·보상 수령·2-13 시작 응답에 유지, 2-13 결과에서 사라짐)
+  const uiOut = { ...ui };
+  ctx.store.putUser(ctx.session.accountId, snap);
+  const action = [2, 3, 4, 5, 6].map((a, i) => ({
+    Action: a, Count: Number([body.MissCnt, body.BadCnt, body.GoodCnt, body.PerfectCnt, body.ExcellentCnt][i]) || 0,
+  }));
+  const rewardCoin = baseCoin + bonusCoin + bossCoin;
+  return [{
+    name: 'MsgBattleResultAns',
+    body: {
+      Seq: 1, Result: 1, IsPlayerWin: win, UserInfo: uiOut,
+      RewardInfo: { Coin: rewardCoin, Charexp: xp, Cash: bonusCash, Familiartity: fam, ItemInfo: [], CarInfo: rewardCars },
+      BattleScore: withdraw ? 0 : Number(body.BattleScore) || 0, ItemInfo: [], Race: race,
+      RaceZone: zoneEntries,
+      ...(clearTop ? { ClearRec: clearTop } : {}),
+      RaceAction: { Action: action, ComboCount: Number(body.ComboCount) || 0 },
+      DeltaInfo: { Charexp: xp, Coin: coin, Cash: bonusCash }, BoostCompensation: boostComp,
+      OpponentCarInfo: race.OpponentCarInfo, IsHeroineDrive: !!body.IsHeroineDrive, PerfectStart: !!body.PerfectStart,
+      RaceType: body.RaceType ?? 1, RaceLevel: body.RaceLevel ?? 1, BaseCoin: Number(race.RewardCoin) || 0, CoinRatio: 1, RaceCoin: raceCoin,
+      MyTimeRecord: withdraw ? 0 : body.TimeRecord, OpponentTimeRecord: withdraw ? 0 : body.OpponentTimeRecord, LeftBoost: body.LeftBoost ?? 0,
+      MyMaxSpeed: body.LinearMaxSpeed, MyMaxDriftSpeed: body.CornerMaxSpeed, Withdraw: withdraw,
+      ...(win ? {} : { RetryFuel: Number(car.FuelConsume) || 20 }),
+      MyCarInfo: { ...car, FinalAttr: faBefore }, NewCars: [],
+      UpdateGirlInfo: updateGirl, GgraphPatch: { Gnode: [] },
+      Track: { TrackId: race.Track?.TrackId, Thema: race.Track?.Thema, LightingIndex: race.Track?.LightingIndex ?? 0 },
+      ...(passenger ? { Passenger: { GirlInfo: passenger } } : {}), PropertySet: snap.PropertySet,
+      ...extra,
+    },
+  }, ...(questChanges.length ? [{ name: 'MsgUpdateNquest', body: { Seq: 2, NquestInfo: questChanges } }] : [])];
+});
+
+/** 숙련도 n 증가: MasteryCapacity 까지, 1씩 MasteryAttr 가장 낮은 능력치(동률이면 앞쪽). (기록 3->5, {1,1,1,0}->{2,1,1,1}) */
+export function addMastery(car: any, n: number) {
+  for (let i = 0; i < n && (Number(car.Mastery) || 0) < (Number(car.MasteryCapacity) || 0); i++) {
     car.Mastery = (Number(car.Mastery) || 0) + 1;
     car.MasteryAttr ??= { AttribMaxSpd: 0, AttribAcc: 0, AttribStability: 0, AttribDrift: 0 };
     const keys = ['AttribMaxSpd', 'AttribAcc', 'AttribStability', 'AttribDrift'];
     const low = keys.reduce((a, k) => ((car.MasteryAttr[k] || 0) < (car.MasteryAttr[a] || 0) ? k : a), keys[0]);
     car.MasteryAttr[low] = (car.MasteryAttr[low] || 0) + 1;
-    car.DeltaMastery += 1;
+    car.DeltaMastery = (Number(car.DeltaMastery) || 0) + 1;
   }
-  if (win) bumpProperty(snap, 'DQUEST_RACE', 1); // 일일 미션 '레이스 3회 승리' (기록 0 -> 1)
+}
 
-  // LevelUp 은 이번 응답에만 싣고 저장하지 않는다(다음 응답·로그인에서 레벨업 연출이 반복되지 않게).
-  const uiOut = { ...ui };
-  delete ui.LevelUp;
-  ctx.store.putUser(ctx.session.accountId, snap);
-  const action = [2, 3, 4, 5, 6].map((a, i) => ({
-    Action: a, Count: Number([body.MissCnt, body.BadCnt, body.GoodCnt, body.PerfectCnt, body.ExcellentCnt][i]) || 0,
-  }));
-  return [{
-    name: 'MsgBattleResultAns',
-    body: {
-      Seq: 1, Result: 1, IsPlayerWin: win, UserInfo: uiOut,
-      RewardInfo: { Coin: coin, Charexp: xp, Cash: bonusCash, Familiartity: fam, ItemInfo: [], CarInfo: [] },
-      BattleScore: Number(body.BattleScore) || 0, ItemInfo: [], Race: race,
-      RaceZone: [{
-        ZoneId: zone.ZoneId, ChangeRace: changed,
-        ...(newRaces.length ? { NewRace: newRaces } : {}),
-        ...(deltaProgress ? { Progress: zone.Progress, DeltaProgress: deltaProgress } : {}),
-      }],
-      ...(clearTop ? { ClearRec: clearTop } : {}),
-      RaceAction: { Action: action, ComboCount: Number(body.ComboCount) || 0 },
-      DeltaInfo: { Charexp: xp, Coin: coin, Cash: bonusCash }, BoostCompensation: 0,
-      OpponentCarInfo: race.OpponentCarInfo, IsHeroineDrive: !!body.IsHeroineDrive, PerfectStart: !!body.PerfectStart,
-      RaceType: body.RaceType ?? 1, RaceLevel: body.RaceLevel ?? 1, BaseCoin: baseCoin, CoinRatio: 1, RaceCoin: raceCoin,
-      MyTimeRecord: body.TimeRecord, OpponentTimeRecord: body.OpponentTimeRecord, LeftBoost: body.LeftBoost ?? 0,
-      MyMaxSpeed: body.LinearMaxSpeed, MyMaxDriftSpeed: body.CornerMaxSpeed, Withdraw: false,
-      RetryFuel: Number(car.FuelConsume) || 20, MyCarInfo: withFinalAttr(car), NewCars: [],
-      UpdateGirlInfo: updateGirl, GgraphPatch: { Gnode: [] }, Track: race.Track,
-      Passenger: passenger ? { GirlInfo: passenger } : {}, SpotSale: [], PropertySet: snap.PropertySet,
-    },
-  }];
-});
-
-// 레이스 보상 수령: {ZoneId, RaceId} -> {Seq, Result, Race(수령 전), RaceZone[{ZoneId, ChangeRace[수령 후]}], ItemInfo, NewCars, UserInfo}
-// 기록: Race.State 18 그대로, ChangeRace.State 17 (CLEAR 해제, PLAYABLE), RewardBoxKind/ItemInfo null. 코인 등은 결과에서 이미 지급.
+// 레이스 보상 수령 (실기록 2-11~2-15):
+//   - FirstPlayReward true 면 battleTable FirstPlayRewardItemID x FirstPlayRewardNumItem 지급 (차량이면 RewardInfo.CarInfo, 아니면 ItemInfo)
+//   - 레이스 칸 소액 보상 ItemInfo {Itemtype, Count} 지급 (코인이면 RewardInfo.Coin 에도)
+//   - RewardBoxKind 1 이면 부품 상자: ★1 부품 1개 (RewardInfo.ItemInfo 와 최상위 ItemInfo, ContainerGrade 1)
+//   - 응답 Race 는 수령 전, ChangeRace 는 State 17 / FirstPlayReward false / RewardBoxKind null
 register('MsgRaceRewardReq', (body, ctx: Ctx): Msg[] => {
   const snap = ctx.store.getUser(ctx.session.accountId);
   const { zone, race } = findRace(snap ?? {}, body?.ZoneId, body?.RaceId);
   if (!snap || !zone || !race) return [{ name: 'MsgRaceRewardAns', body: { Seq: 1, Result: 0 } }];
   const before = structuredClone(race);
-  if (race.State & ST.CLEAR) race.State = (race.State & ~ST.CLEAR) | ST.PLAYABLE;
+  const reward: any = { Coin: 0, Charexp: 0, Cash: 0, Familiartity: 0, ItemInfo: [], CarInfo: [] };
+  const topItems: any[] = [];
+  const newCars: any[] = [];
+  if (race.State & ST.CLEAR) {
+    const ar = areaRace(zone.ZoneId, race.RaceIndex);
+    if (race.FirstPlayReward && ar?.FirstPlayRewardItemID) {
+      const id = Number(ar.FirstPlayRewardItemID), n = Number(ar.FirstPlayRewardNumItem) || 1;
+      if (carDefOf(id)) {
+        for (let i = 0; i < n; i++) { const c = newOwnedCar(snap, id); snap.Cars.CarInfo.push(c); reward.CarInfo.push(c); newCars.push(c); }
+      } else if (grantItem(snap, id, n)) {
+        reward.ItemInfo.push({ Itemtype: id, Count: n, DeltaNum: n });
+        if (id === 61001) reward.Coin += n;
+      }
+    }
+    if (race.ItemInfo?.Itemtype && race.DailyRewardTime === undefined) {
+      const { Itemtype, Count } = race.ItemInfo;
+      if (grantItem(snap, Number(Itemtype), Number(Count))) {
+        reward.ItemInfo.push({ Itemtype, Count, DeltaNum: Count });
+        if (Number(Itemtype) === 61001) reward.Coin += Number(Count);
+      }
+    }
+    // 보상 상자 내용: 존 BattleArea.Parts 가중치(★1..5)가 있으면 그 등급 부품 1개, 모두 0 이면 코인 RewardCoin/2
+    //   (실기록: 존 1 Parts 0 -> 1-13·1-14 코인 300, 존 2 Parts [1,0,0,0,0] -> 2-12 ★1 부품)
+    if (Number(race.RewardBoxKind) === 1) {
+      const w: number[] = (areaOf(zone.ZoneId)?.Parts ?? []).map(Number);
+      const tot = w.reduce((a, b) => a + (b || 0), 0);
+      if (tot > 0) {
+        let r = Math.random() * tot, g = 1;
+        for (let i = 0; i < w.length; i++) { r -= w[i] || 0; if (r < 0) { g = i + 1; break; } }
+        const def = randomPart(g);
+        if (def) { const p = grantPart(snap, def); reward.ItemInfo.push(p); topItems.push(p); }
+      } else {
+        const c = Math.floor((Number(race.RewardCoin) || 0) / 2);
+        if (c > 0) { grantItem(snap, 61001, c); reward.Coin += c; reward.ItemInfo.push({ Itemtype: 61001, Count: c, DeltaNum: c }); }
+      }
+      reward.ContainerGrade = 1;
+    }
+    race.State = (race.State & ~ST.CLEAR) | ST.PLAYABLE;
+    race.FirstPlayReward = false;
+    delete race.RewardBoxKind;
+  }
   ctx.store.putUser(ctx.session.accountId, snap);
+  const uiOut = { ...snap.UserInfo };
   return [{
     name: 'MsgRaceRewardAns',
     body: {
       Seq: 1, Result: 1, Race: before,
-      RaceZone: [{ ZoneId: zone.ZoneId, ChangeRace: [{ ...race, RewardBoxKind: null, ItemInfo: null }] }],
-      ItemInfo: [], NewCars: [], UserInfo: snap.UserInfo,
+      RaceZone: [{ ZoneId: zone.ZoneId, ChangeRace: [{ ...race, RewardBoxKind: null, ItemInfo: race.ItemInfo ?? null }] }],
+      RewardInfo: reward, ItemInfo: topItems, NewCars: newCars, UserInfo: uiOut,
     },
   }];
 });
@@ -293,7 +474,10 @@ register('MsgUpdateGirlMemoryReq', (body, ctx): Msg[] => {
     let mine = snap.GirlMemorySet.GirlMemory.find((x: any) => Number(x.Girlid) === Number(gm.Girlid));
     if (!mine) { mine = { Girlid: Number(gm.Girlid), Memory: [] }; snap.GirlMemorySet.GirlMemory.push(mine); }
     for (const m of gm.Memory ?? []) {
-      if (!mine.Memory.some((x: any) => Number(x.Id) === Number(m.Id))) mine.Memory.push({ ...m, RewardState: 2 });
+      // 이미 있으면 FmFlag 를 OR (실기록: 2 에 4 가 더해져 6)
+      const ex = mine.Memory.find((x: any) => Number(x.Id) === Number(m.Id));
+      if (ex) { if (m.FmFlag !== undefined) ex.FmFlag = (Number(ex.FmFlag) || 0) | Number(m.FmFlag); }
+      else mine.Memory.push({ ...m, RewardState: 2 });
     }
   }
   ctx.store.putUser(ctx.session.accountId, snap);

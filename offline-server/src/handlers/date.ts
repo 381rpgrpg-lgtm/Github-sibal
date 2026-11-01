@@ -20,17 +20,18 @@
 //   - 문항별 '좋아하는 답'은 src/data/date-answers.json (반응 대사 비교로 만든 표, 기록 2문항 일치)
 //   - 만족도 = 3 + 좋아함 - 싫어함 + 채팅(Best 2 / Good 1 / Pass 0), 1..5. 배율 1:0.5 2:0.75 3:1 4:1.25 5:1.5
 //   - 종료 대본: 좋아함>싫어함 Good, 같으면 Basic, 적으면 Bad. 채팅 이벤트는 조건(ChatConditionA..C) 충족 중 무작위(튜토리얼은 A)
-//   - 첫 데이트 보너스 112 는 두 기록 모두 첫 데이트에서 같은 값이라 고정값으로 둔다.
 //   - 백화점(DateType 3) 등 장소 외 데이트는 미구현 (Result 2).
 import { readFileSync, existsSync } from 'node:fs';
 import { register, type Msg, type Ctx } from '../rpc.js';
 import { bumpProperty, levelUp } from './battle.js';
 import { ensureGirl } from './girls.js';
+import { refreshQuests, questEvent } from '../quests.js';
 
 const DATA = new URL('../../data/', import.meta.url).pathname;
 const TUT_DATE = 1024;
 const MULT: Record<number, number> = { 1: 0.5, 2: 0.75, 3: 1, 4: 1.25, 5: 1.5 };
-const FIRST_DATE_BONUS = 112;
+// 첫 장소 보너스: girlTable FirstDatePlaceBonus (20105·20101·20102 = 112, 20207 = 103). 실기록 두 건 모두 그 장소 첫 데이트.
+import { girlDef as gdef } from '../gamecalc.js';
 const COOLTIME_SEC = 30;
 
 interface Row { Id: number; ScriptName: string; FamiliarityLv: number; Step?: number; Function: string; TextTag?: string; Sound?: string;
@@ -238,7 +239,8 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
     const sat = Math.max(1, Math.min(5, 3 + st.likes - st.dislikes + st.chatSat));
     st.satisfaction = sat;
     const delta = Math.round((Number(place.Familiarity) || 0) * MULT[sat]);
-    const bonus = (Number(g.NthDate) || 0) === 0 ? FIRST_DATE_BONUS : 0;
+    const firstAtPlace = !(g.DatingState ?? []).some((x: any) => Number(x.Placeid) === st.place);
+    const bonus = firstAtPlace ? Number(gdef(st.girl)?.FirstDatePlaceBonus) || 0 : 0;
     st.end ??= 'Date_End_Basic';
     (st as any).firstDate = (Number(g.NthDate) || 0) === 0;
     g.Familiarity = (Number(g.Familiarity) || 0) + delta + bonus;
@@ -254,7 +256,6 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
     delete ui.LevelUp;
     levelUp(snap);
     const uiOut = { ...ui };
-    delete ui.LevelUp;
     save();
     return [{ name: 'MsgScriptProgressAns', body: { ...head, UserInfo: uiOut, DeltaInfo: { Charexp: xp },
       GirlInfo: { ...g, DeltaFamiliarity: delta, BonusFamiliarity: bonus },
@@ -291,6 +292,10 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
       }
     }
     bumpProperty(snap, 'DQUEST_DATE', 1);
+    // 퀘스트 사건 4: [횟수, 캐릭터|[FIRSTGIRL], 장소?, 만족도 이상?] (10101 호텔뷔페 42082, 10204 만족도 4 이상 3회)
+    questEvent(snap, 4, (p) => (!p[1] || p[1] === '[FIRSTGIRL]' ? Number(snap.UserInfo?.FirstGirl) : Number(p[1])) === st.girl
+      && (!p[2] || Number(p[2]) === st.place) && (!p[3] || sat >= Number(p[3])));
+    const questChanges = refreshQuests(snap);
     setState(ctx, null);
     ctx.store.putUser(ctx.session.accountId, snap);
     return [
@@ -299,6 +304,7 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
         Seq: 2, GirlInfo: g, UserInfo: ui, DatePlace: st.place, DateResult: sat, UpdateGirlInfo: [],
         GirlMemorySet: snap.GirlMemorySet, GgraphPatch: { Gnode: patch }, CallScript: [], PropertySet: snap.PropertySet,
       } },
+      ...(questChanges.length ? [{ name: 'MsgUpdateNquest', body: { Seq: 3, NquestInfo: questChanges } }] : []),
     ];
   }
 
