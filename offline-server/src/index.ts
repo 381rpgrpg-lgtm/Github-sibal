@@ -18,6 +18,7 @@ import './handlers/garage.js';
 import './handlers/items.js';
 import './handlers/parts.js';
 import './handlers/date.js';
+import './handlers/inventory2.js';
 
 const cfg = JSON.parse(readFileSync(new URL('../config.json', import.meta.url), 'utf8'));
 const CLIENT_DIR = new URL('../data/client/', import.meta.url).pathname;

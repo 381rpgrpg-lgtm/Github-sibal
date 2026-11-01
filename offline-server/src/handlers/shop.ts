@@ -123,7 +123,10 @@ function carBox(si: any, box: any, body: any, snap: any, ctx: any): Msg[] {
     console.warn(`[shop] ${id} 구매 거절: 차고 칸 부족`); return fail(R_UNAVAILABLE, id);
   }
   const nowS = Math.floor(Date.now() / 1000);
-  const free = (snap.OnedayFreeShop ?? []).find((x: any) => Number(x.StoreItemId) === id && !(Number(x.ExipreTime) > nowS));
+  const daily = (snap.OnedayFreeShop ?? []).find((x: any) => Number(x.StoreItemId) === id);
+  const free = daily && !(Number(daily.ExipreTime) > nowS) ? daily : null;
+  // 무료 일일 상자를 그날 이미 받았으면 거절 (실측: 같은 날 두 번째 71026 -> Result 2)
+  if (daily && !free) return [{ name: 'MsgBuyProductAns', body: { Seq: 1, Result: 2, StoreItemId: id, Buycount: Number(body?.Buycount) || 1, UserInfo: ui } }];
   const price = free ? { Cash: 0, Coin: 0, SocialPoint: 0 } : { Cash: Number(si.PriceCash) || 0, Coin: Number(si.PriceCoin) || 0, SocialPoint: Number(si.PriceSocialPoint) || 0 };
   if ((Number(ui.Cash) || 0) < price.Cash) return fail(R_NO_CASH, id);
   if ((Number(ui.Coin) || 0) < price.Coin || (Number(ui.SocialPoint) || 0) < price.SocialPoint) return fail(R_NO_COIN, id);
@@ -143,7 +146,7 @@ function carBox(si: any, box: any, body: any, snap: any, ctx: any): Msg[] {
       RewardInfo: { Coin: 0, Charexp: 0, Cash: 0, Familiartity: 0, ItemInfo: [], CarInfo: [car], ContainerGrade: 1 },
       Cost: { Cash: price.Cash, Coin: price.Coin, SocialPoint: price.SocialPoint, Token: 0, GoldCash: 0 }, Buycount: Number(body?.Buycount) || 1,
       GachaPity: snap.GachaPity, PartsPity: snap.PartsPity, PartsPityHq: snap.PartsPityHq,
-      ...(snap.OnedayFreeShop ? { OnedayFreeShop: snap.OnedayFreeShop } : {}),
+      ...(free ? { OnedayFreeShop: snap.OnedayFreeShop } : {}), // 무료 상자를 쓴 응답에만 (실측)
     },
   }];
 }
