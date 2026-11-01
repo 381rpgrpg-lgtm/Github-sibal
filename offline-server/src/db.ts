@@ -1,6 +1,7 @@
 // SQLite 저장 계층 (추상화). 오프라인 단일 유저의 계정 상태를 보관한다.
+// Node 내장 node:sqlite 사용 → 네이티브 빌드가 필요 없다(Termux/안드로이드에서 npm install 시 컴파일 불필요).
 // 상태 전체를 하나의 스냅샷(JSON)으로 저장/조립한다. 세분화 테이블은 단계적으로 추가.
-import Database from 'better-sqlite3';
+import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
@@ -12,13 +13,13 @@ export interface Store {
 }
 
 export class SqliteStore implements Store {
-  private db: Database.Database;
+  private db: DatabaseSync;
 
   constructor(path: string) {
     mkdirSync(dirname(path), { recursive: true });
-    this.db = new Database(path);
-    this.db.pragma('journal_mode = WAL');
+    this.db = new DatabaseSync(path);
     this.db.exec(`
+      PRAGMA journal_mode = WAL;
       CREATE TABLE IF NOT EXISTS users (
         account_id TEXT PRIMARY KEY,
         snapshot   TEXT NOT NULL,
