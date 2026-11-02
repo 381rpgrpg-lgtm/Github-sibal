@@ -48,3 +48,30 @@ register('MsgGetGirlMemoryRewardReq', (body, ctx): Msg[] => {
   ctx.store.putUser(ctx.session.accountId, snap);
   return [{ name: 'MsgGetGirlMemoryRewardAns', body: { GirlMemorySet: snap.GirlMemorySet, UserInfo: snap.UserInfo, ItemInfo: items } }];
 });
+
+// 업적 보상 수령. 실기록(2026-11-02, 업적 12개): State 2 -> 3, RewardIndex x RewardValue 지급 (BonusIndex/BonusValue 는 주지 않음:
+//   코인 합 1100 = Reward 합과 일치). 응답 {UserInfo, MyMemorySet{수령한 레코드}, ItemInfo}:
+//   ItemInfo 는 아이템을 요청 순서로 {Itemid, Itemtype, Count, StackNum, DeltaNum}, 그 뒤 코인(61001)·캐시(61002) 합계 {Itemtype, Count, DeltaNum}.
+register('MsgGetMemoryRewardReq', (body, ctx): Msg[] => {
+  const snap = ctx.store.getUser(ctx.session.accountId);
+  if (!snap) return [{ name: 'MsgGetMemoryRewardAns', body: { Result: 2 } }];
+  const defs = new Map(((table('achievementTable.json')?.Achievements ?? []) as any[]).map((a) => [Number(a.Index), a]));
+  const mine: any[] = snap.MyMemorySet?.Memory ?? [];
+  const claimed: any[] = [], items: any[] = [];
+  const cur = new Map<number, number>();
+  for (const r of body?.MyMemorySet?.Memory ?? []) {
+    const m = mine.find((x) => Number(x.Id) === Number(r.Id));
+    const d = defs.get(Number(r.Id));
+    if (!m || !d || Number(m.State) !== 2) continue;
+    m.State = 3;
+    claimed.push(m);
+    const t = Number(d.RewardIndex), n = Number(d.RewardValue) || 0;
+    if (!t || !n || !grantItem(snap, t, n)) continue;
+    if (t === 61001 || t === 61002) { cur.set(t, (cur.get(t) ?? 0) + n); continue; }
+    const it = (snap.Items?.ItemInfo ?? []).find((x: any) => Number(x.Itemtype) === t);
+    items.push(it ? { Itemid: it.Itemid, Itemtype: t, Count: n, StackNum: it.Count, DeltaNum: n } : { Itemtype: t, Count: n, DeltaNum: n });
+  }
+  for (const t of [61001, 61002]) if (cur.get(t)) items.push({ Itemtype: t, Count: cur.get(t), DeltaNum: cur.get(t) });
+  ctx.store.putUser(ctx.session.accountId, snap);
+  return [{ name: 'MsgGetMemoryRewardAns', body: { Seq: 1, UserInfo: snap.UserInfo, MyMemorySet: { Memory: claimed }, ItemInfo: items } }];
+});

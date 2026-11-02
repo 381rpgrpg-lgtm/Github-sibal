@@ -56,13 +56,15 @@ register('MsgUpgradeCarReq', (body, ctx): Msg[] => {
     snap.Cars.CarInfo = snap.Cars.CarInfo.filter((c: any) => !ids.has(Number(c.Carid)));
     const removedParts = (snap.Items?.ItemInfo ?? []).filter((it: any) => ids.has(Number(it.Equipcarid)));
     if (removedParts.length) snap.Items.ItemInfo = snap.Items.ItemInfo.filter((it: any) => !removedParts.includes(it));
-    bumpProperty(snap, 'DQUEST_PARTSUP', 1);
+    const propChanged = bumpProperty(snap, 'DQUEST_PARTSUP', 1);
     questEvent(snap, 17, () => true); // 퀘스트: 차량 n회 강화
     ctx.store.putUser(ctx.session.accountId, snap);
     return [{ name: 'MsgUpgradeCarAns', body: {
       Seq: 1, Result: R_OK, UpgradeSuccess: true, ResultCarInfo: { ...car, CarEffect: car.CarEffect ?? [] }, UserInfo: ui,
       RemovedCarInfo: [...ids].map((Carid) => ({ Carid })), RemovedPartsInfo: removedParts.map((p: any) => ({ Itemid: p.Itemid })),
-      NormalDeltaExp: pv.exp, BonusDeltaExp: 0, // 재료 강화 응답에는 PropertySet 없음 (실기록)
+      NormalDeltaExp: pv.exp, BonusDeltaExp: 0,
+      // PropertySet 은 일일 미션 값이 바뀐 때만 (실기록 2026-11-02: 그날 첫 강화에만 있음)
+      ...(propChanged ? { PropertySet: snap.PropertySet } : {}),
     } }];
   }
   if (Number(ui.Completion) & TUT_REINFORCE_CAR) return fail('재료 없음 (튜토리얼 강화는 이미 완료)');
@@ -74,14 +76,14 @@ register('MsgUpgradeCarReq', (body, ctx): Msg[] => {
   car.Attributes ??= {};
   for (const k of ATTRS) car.Attributes[k] = (Number(car.Attributes[k]) || 0) + 2;
   ui.Completion = Number(ui.Completion) | TUT_REINFORCE_CAR;
-  bumpProperty(snap, 'DQUEST_PARTSUP', 1); // 일일 미션 '차량·부품 강화 1회' (기록 0 -> 1)
+  const propChanged = bumpProperty(snap, 'DQUEST_PARTSUP', 1); // 일일 미션 '차량·부품 강화 1회' (기록 0 -> 1)
   ctx.store.putUser(ctx.session.accountId, snap);
   return [{
     name: 'MsgUpgradeCarAns',
     body: {
       Seq: 1, Result: R_OK, UpgradeSuccess: true, ResultCarInfo: car, UserInfo: ui,
       RemovedCarInfo: [], RemovedPartsInfo: [], NormalDeltaExp: deltaExp, BonusDeltaExp: 0,
-      PropertySet: snap.PropertySet,
+      ...(propChanged ? { PropertySet: snap.PropertySet } : {}),
     },
   }];
 });

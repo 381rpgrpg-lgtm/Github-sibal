@@ -19,8 +19,10 @@ const rpc=async(name,body)=>{const j=await (await fetch(B+'/api/rpc',{method:'PO
 await rpc('MsgLoginReq',{});
 const db=new DatabaseSync(dbPath);
 const row=db.prepare('select account_id from users').get();
+// 녹화 시점과 재생 시점이 달라 일일 초기화가 끼어들지 않도록 DQUEST 기준 시각을 미래로 (--daily 면 그대로)
+if(!process.argv.includes('--daily')) for(const p of ud.PropertySet?.Property??[]) if(p.PropertyName==='DQUEST') p.Tvalue=4102444800;
 db.prepare('update users set snapshot=? where account_id=?').run(JSON.stringify(ud), row.account_id);
-db.prepare("delete from meta where key like 'date:%' or key like 'battle:%'").run();
+db.prepare("delete from meta where key like 'date:%' or key like 'battle:%' or key like 'buy:%'").run();
 db.close();
 const IGN=new Set(['Seq','time','Fueltime','DateCoolTime','NextFamiliarityTime','ExpireTime','ReplaySeed','Tvalue','EventRaceNextRefreshTime','DailyRewardTime','Charname']);
 function diff(a,b,path,out){
@@ -46,7 +48,15 @@ for(const r of recs){
   const out=[];
   const mn=mine.map(m=>m.name).filter(n=>n!=='MsgNotifyEvent'&&n!=='MsgUpdateNquest'&&n!=='MsgUpdateData').join(','), rn=rec.map(m=>m.name).filter(n=>n!=='MsgNotifyEvent'&&n!=='MsgUpdateNquest'&&n!=='MsgUpdateData').join(',');
   if(mn!==rn) out.push(`messages: mine ${mn} rec ${rn}`);
-  for(const m of rec){ const x=mine.find(y=>y.name===m.name); if(x) diff(x.body,m.body,m.name,out); }
+  // 같은 이름이 여러 개(MsgNotifyEvent 등)면 Seq 외 최상위 키 구성이 같은 것끼리, 없으면 같은 순번끼리 비교
+  const keyOf=b=>Object.keys(b||{}).filter(k=>k!=='Seq').sort().join(',');
+  const used=new Set();
+  for(const m of rec){
+    const same=mine.filter(y=>y.name===m.name&&!used.has(y));
+    const x=same.find(y=>keyOf(y.body)===keyOf(m.body))??same[0];
+    if(x){ used.add(x); diff(x.body,m.body,m.name,out); }
+    else if(m.name==='MsgNotifyEvent') out.push(`MsgNotifyEvent: missing (rec keys ${keyOf(m.body)})`);
+  }
   total++; if(!out.length) clean++;
   console.log(`${out.length?'✗':'✓'} ${r.file.split('_')[0]} ${r.name} ${JSON.stringify(r.request).slice(0,70)}`);
   if(out.length) for(const o of out.slice(0, verbose?40:8)) console.log('    '+o);

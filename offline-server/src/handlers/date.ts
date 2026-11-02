@@ -25,6 +25,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { register, type Msg, type Ctx } from '../rpc.js';
 import { bumpProperty, levelUp } from './battle.js';
 import { ensureGirl } from './girls.js';
+import { evalGirlUnlocks } from '../girlunlock.js';
 import { refreshQuests, questEvent } from '../quests.js';
 
 const DATA = new URL('../../data/', import.meta.url).pathname;
@@ -297,7 +298,11 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
         patch.push(next);
       }
     }
-    bumpProperty(snap, 'DQUEST_DATE', 1);
+    // 연락처 해금 조건 (호감도 단계·데이트 조건). 바뀐 캐릭터 레이스는 MsgUpdateData 로 (추정: 데이트로 열리는 기록 없음)
+    const unlock = evalGirlUnlocks(snap, st.girl);
+    for (const n of unlock.nodes) if (!patch.includes(n)) patch.push(n);
+    const raceUpdate = [...unlock.races].map(([ZoneId, ChangeRace]) => ({ ZoneId, ChangeRace }));
+    const propChanged = bumpProperty(snap, 'DQUEST_DATE', 1);
     // 퀘스트 사건 4: [횟수, 캐릭터|[FIRSTGIRL], 장소?, 만족도 이상?] (10101 호텔뷔페 42082, 10204 만족도 4 이상 3회)
     questEvent(snap, 4, (p) => (!p[1] || p[1] === '[FIRSTGIRL]' ? Number(snap.UserInfo?.FirstGirl) : Number(p[1])) === st.girl
       && (!p[2] || Number(p[2]) === st.place) && (!p[3] || sat >= Number(p[3])));
@@ -308,9 +313,10 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
       { name: 'MsgScriptProgressAns', body: head },
       { name: 'MsgDateResultAns', body: {
         Seq: 2, GirlInfo: g, UserInfo: ui, DatePlace: st.place, DateResult: sat, UpdateGirlInfo: [],
-        GirlMemorySet: snap.GirlMemorySet, GgraphPatch: { Gnode: patch }, CallScript: [], PropertySet: snap.PropertySet,
+        GirlMemorySet: snap.GirlMemorySet, GgraphPatch: { Gnode: patch }, CallScript: [], ...(propChanged ? { PropertySet: snap.PropertySet } : {}),
       } },
       ...(questChanges.length ? [{ name: 'MsgUpdateNquest', body: { Seq: 3, NquestInfo: questChanges } }] : []),
+      ...(raceUpdate.length ? [{ name: 'MsgUpdateData', body: { Seq: 4, UpdateData: { RaceZone: raceUpdate } } }] : []),
     ];
   }
 

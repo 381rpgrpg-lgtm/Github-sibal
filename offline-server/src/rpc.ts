@@ -4,6 +4,8 @@ import type { Store } from './db.js';
 import type { GameData } from './content.js';
 import type { Session } from './auth.js';
 import type { Upstream } from './upstream.js';
+import { achBefore, achAfter } from './achievements.js';
+import { dailyReset } from './daily.js';
 
 export interface Ctx {
   store: Store;
@@ -22,6 +24,7 @@ export interface Msg {
 export type Handler = (body: any, ctx: Ctx) => Msg[] | Promise<Msg[]>;
 
 const handlers = new Map<string, Handler>();
+const LEVELUP_MSGS = new Set(['MsgBattleStartAns', 'MsgBattleResultAns', 'MsgRaceRewardAns', 'MsgScriptProgressAns', 'MsgDateResultAns', 'MsgUserData', 'MsgLoginAns']);
 const RECORD_ALWAYS = new Set((process.env.DG_RECORD_ALWAYS ?? '').split(',').map((x) => x.trim()).filter(Boolean));
 
 export function register(name: string, fn: Handler): void {
@@ -59,7 +62,36 @@ export async function dispatch(name: string, body: any, ctx: Ctx): Promise<{ mes
     console.warn(`[rpc] 미구현 메시지: ${name} ${JSON.stringify(body).slice(0, 2000)}`);
     return { error: `unimplemented:${name}` };
   }
+  // 업적 진행: 핸들러 전후 상태를 비교하고 메시지별 사건을 반영 (achievements.ts)
+  const id = ctx.session?.accountId;
+  // 일일 초기화 (daily.ts): 로그인은 핸들러가 MsgUserData 에 담고, 그 외 요청은 끝에 MsgNotifyEvent 3개를 붙인다
+  let daily: ReturnType<typeof dailyReset> = null;
+  let preSnap = id && name !== 'MsgLoginReq' ? ctx.store.getUser(id) : null;
+  if (preSnap && id) { daily = dailyReset(preSnap); if (daily) ctx.store.putUser(id, preSnap); }
+  const pre = preSnap ? achBefore(preSnap) : null;
+  preSnap = null;
   const messages = await fn(body, ctx);
+  if (pre && id) {
+    const snap = ctx.store.getUser(id);
+    if (achAfter(snap, pre, name, body, messages)) ctx.store.putUser(id, snap);
+  }
+  if (daily && id) {
+    const snap = ctx.store.getUser(id);
+    const seq = Number(messages[messages.length - 1]?.body?.Seq) || messages.length;
+    messages.push(
+      { name: 'MsgNotifyEvent', body: { Seq: seq + 1, PropertySet: snap?.PropertySet } },
+      { name: 'MsgNotifyEvent', body: { Seq: seq + 2, Daygift: daily.Daygift, MailBox: snap?.MailBox } },
+      { name: 'MsgNotifyEvent', body: { Seq: seq + 3, DailyRewardRaces: daily.DailyRewardRaces } },
+    );
+  }
+  // UserInfo.LevelUp 은 레이스·데이트 응답에만 실린다 (실기록: 레벨업 뒤 RaceReward·BattleStart·DateResult 에는 있고
+  //   UpdateNquest·UpdateCompletion·CollectFamiliarity 에는 없음). 저장값은 다음 레이스 결과까지 유지.
+  for (const m of messages) {
+    if (!LEVELUP_MSGS.has(m.name) && m.body?.UserInfo?.LevelUp) {
+      const { LevelUp: _drop, ...rest } = m.body.UserInfo;
+      m.body = { ...m.body, UserInfo: rest };
+    }
+  }
   console.log(`[rpc] ${name} -> ${messages.map((m) => m.name).join(',') || '(none)'}`);
   return { messages };
 }

@@ -19,6 +19,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { register, type Msg, type Ctx } from '../rpc.js';
 import { grantItem } from '../inventory.js';
 import { ensureGirl, newGirlRecord } from './girls.js';
+import { evalGirlUnlocks } from '../girlunlock.js';
 import { refreshQuests, questEvent } from '../quests.js';
 import { table as gtable, areaOf, areaRace, finalAttr, makeOpponent, newOwnedCar, randomPart, grantPart, carDefOf, relativeDifficulty, syncGirl } from '../gamecalc.js';
 
@@ -65,15 +66,20 @@ function spendFuel(ui: any, amount: number) {
   ui.Fueltime = Math.max(Number(ui.Fueltime) || 0, now()) + amount * FUEL_FILL_SEC;
 }
 
-/** PropertySet.Property[] 의 Nvalue 증가 (일일 미션 카운터 등) */
-export function bumpProperty(snap: any, name: string, by: number) {
+/** PropertySet.Property[] 의 Nvalue 증가 (일일 미션 카운터). vconstTable <이름>_MAX 가 있으면 그 값에서 멈춘다
+ *  (DQUEST_RACE 3, DQUEST_DATE 3, DQUEST_PARTSUP 1). 반환: 값이 바뀌었으면 true.
+ *  실기록: 응답 PropertySet 은 값이 바뀐 요청에만 실린다 (4번째 승리·2번째 강화 응답에는 없음). */
+export function bumpProperty(snap: any, name: string, by: number): boolean {
   snap.PropertySet ??= { Property: [] };
   snap.PropertySet.Property ??= [];
-  const p = snap.PropertySet.Property.find((x: any) => x.PropertyName === name);
-  if (p) p.Nvalue = (Number(p.Nvalue) || 0) + by;
-  else snap.PropertySet.Property.push({ PropertyName: name, Nvalue: by });
+  const maxRow = (table('vconstTable.json')?.Vconst ?? []).find((c: any) => c?.Name === `${name}_MAX`);
+  const max = Number(maxRow?.Dval) || Infinity;
+  let p = snap.PropertySet.Property.find((x: any) => x.PropertyName === name);
+  if (!p) { p = { PropertyName: name, Nvalue: 0 }; snap.PropertySet.Property.push(p); }
+  const prev = Number(p.Nvalue) || 0;
+  p.Nvalue = Math.min(max, prev + by);
+  return p.Nvalue !== prev;
 }
-
 
 // 레벨업. 기록(2026-11-01, 데이트 결과로 Lv1 -> 2): Charexp 는 다음 레벨 기준으로 다시 센다(214+27=241 -> Lv2, Charexp 5 = 241-236),
 //   Fuelvalue = 새 레벨 Gasoline(418), Fueltime = 지금(연료 가득), UserInfo.LevelUp {Level, FuelMax, Coin 0, Cash 2},
@@ -152,14 +158,37 @@ register('MsgBattleStartReq', (body, ctx: Ctx): Msg[] => {
 });
 
 // 새로 열리는 레이스 준비: 첫 플레이 보상 표시(FirstPlayRewardItemID 가 있으면 true),
-//   레이스 칸에 미리 정해 두는 소액 보상 ItemInfo (실기록: 61001 코인 90, 61005 숙련도 2. 출현 확률·종류 표는 미확인 -> 추정 50%).
-function openRace(zoneId: number, race: any) {
+//   battleTable OpenQuestId 가 있고 그 퀘스트를 아직 보상 받지 않았으면 State 8 + LockQuestId (실기록 3-14, 퀘스트 10302 보상 시 열림),
+//   레이스 칸 소액 보상 ItemInfo. 실기록: 존 2 [2-14 코인 90, 2-15 숙련도 2], 존 3 [3-12 도색 쿠폰 60035, 3-13 경기 티켓 60010,
+//   3-14 코인 105, 3-15 숙련도 2], 존 1 과 각 존 첫 레이스는 없음. 출현 확률·종류 표는 미확인 -> 추정: 존 2 이상 첫 레이스 외 70%,
+//   종류 균등, 코인 = 60 + 15 x 존.
+const RACE_ITEMS = (zone: number) => [{ Itemtype: 61001, Count: 60 + 15 * zone }, { Itemtype: 61005, Count: 2 }, { Itemtype: 60035, Count: 1 }, { Itemtype: 60010, Count: 1 }];
+function openRace(zoneId: number, race: any, snap?: any) {
+  const ar = areaRace(zoneId, race.RaceIndex);
   race.State = ST.PLAYABLE;
-  race.FirstPlayReward = !!areaRace(zoneId, race.RaceIndex)?.FirstPlayRewardItemID;
+  race.FirstPlayReward = !!ar?.FirstPlayRewardItemID;
   race.TryCount = Number(race.TryCount) || 0;
-  if (!race.Boss && !isGirlRace(race) && Math.random() < 0.5) {
-    race.ItemInfo = Math.random() < 0.5 ? { Itemtype: 61001, Count: 90 } : { Itemtype: 61005, Count: 2 };
+  const q = Number(ar?.OpenQuestId) || 0;
+  if (q && snap && !(snap.NquestInfos?.NquestInfo ?? []).some((x: any) => Number(x.QuestId) === q && Number(x.State) === 7)) {
+    race.State = ST.LOCKED; race.LockQuestId = q;
   }
+  const first = Number(race.RaceIndex) === Math.min(...(areaOf(zoneId)?.Race ?? []).filter((r: any) => Number(r.RaceType) === 1).map((r: any) => Number(r.RaceIndex)));
+  if (!race.Boss && !isGirlRace(race) && Number(zoneId) >= 2 && !first && Math.random() < 0.7) {
+    const pool = RACE_ITEMS(Number(zoneId));
+    race.ItemInfo = pool[Math.floor(Math.random() * pool.length)];
+  }
+}
+
+/** 퀘스트 보상 수령으로 잠금이 풀리는 레이스 (LockQuestId). 바뀐 레이스를 존별로 돌려준다. (실기록 10302 -> 3-14 State 1, LockQuestId null) */
+export function unlockQuestRaces(snap: any, questId: number): { ZoneId: number; ChangeRace: any[] }[] {
+  const out: { ZoneId: number; ChangeRace: any[] }[] = [];
+  for (const z of snap.RaceZones?.RaceZone ?? []) {
+    const rs = (z.Race ?? []).filter((r: any) => Number(r.LockQuestId) === questId);
+    // 알림에는 LockQuestId null, 저장 레코드에서는 필드를 지운다 (실기록: 이후 시작 응답의 RaceInfo 에 LockQuestId 없음)
+    for (const r of rs) { r.State = ST.PLAYABLE; delete r.LockQuestId; }
+    if (rs.length) out.push({ ZoneId: Number(z.ZoneId), ChangeRace: rs.map((r: any) => ({ ...r, LockQuestId: null })) });
+  }
+  return out;
 }
 
 // 존 해금 시 캐릭터 레이스(battleTable RaceType 7, GirlId) 생성. 실기록 존 3: RaceId 50<존><순번>, RewardCoin 0,
@@ -257,37 +286,23 @@ register('MsgBattleResultReq', (body, ctx: Ctx): Msg[] => {
   // 레이스 상태
   let deltaProgress = 0;
   const extra: any = {};
+  const lockedUpdate: any[] = []; // 퀘스트 잠금으로 열린 레이스: 실기록은 MsgUpdateData 로도 보낸다
   if (win) {
     race.State = boss ? (race.State & ~(ST.FAIL | ST.PLAYABLE | ST.CLEAR)) | ST.WIN   // 보스: 16 (보상 수령 단계 없음)
       : (race.State & ~(ST.FAIL | ST.PLAYABLE)) | ST.CLEAR | ST.WIN;                    // 일반·캐릭터: 18
     if (Number(body.RaceLevel ?? 1) === 1 && race.StateHard & ST.LOCKED && !boss) race.StateHard = ST.PLAYABLE;
+    // 보상 상자: 보스가 아닌 레이스 첫 승리 때 존 Box1 확률 (실기록 22건: 첫 플레이 보상 레이스 3-11, 캐릭터 레이스 3-25 에도 붙음)
+    if (firstWin && !boss && Math.random() < (Number(areaOf(zone.ZoneId)?.Box1) || 0)) race.RewardBoxKind = 1;
     if (firstWin && !boss && !girlRace) {
       deltaProgress = 10;
       zone.Progress = (Number(zone.Progress) || 0) + deltaProgress;
-      // 보상 상자: FirstPlayReward 가 없는 레이스는 존 Box1 확률로 부품 상자 (실기록 2-12, 존 2 Box1 0.51)
-      if (!race.FirstPlayReward && Math.random() < (Number(areaOf(zone.ZoneId)?.Box1) || 0)) race.RewardBoxKind = 1;
       const order = [...zone.Race].filter((r: any) => !isGirlRace(r) && !r.Boss && Number(r.RaceIndex) < 20)
         .sort((a: any, b: any) => a.RaceIndex - b.RaceIndex);
       const next = order[order.indexOf(race) + 1] ?? zone.Race.find((r: any) => r.Boss);
       main.NewRace = [];
-      if (next && next.State & ST.LOCKED) { openRace(zone.ZoneId, next); main.NewRace.push(next); }
-      // 캐릭터 레이스: 같은 존 13번 승리 후 열림 (실기록 2-13 -> 2-25. 다른 존은 추정)
-      if (Number(race.RaceIndex) === 13) {
-        const girls = ensureGirlRaces(zone).filter((r: any) => r.State & ST.LOCKED);
-        const nodes: any[] = [];
-        for (const g of girls) {
-          g.State = ST.PLAYABLE;
-          g.UnlockGirlInfo = { Girlid: Number(g.UnlockGirlInfo?.Girlid), State: 6 };
-          // 관계도 노드를 '해금 가능'(6)으로 (실기록 2-13 승리: Gnode State 6, GirlInfo State 6)
-          const node = (snap.Ggraph?.Gnode ?? []).find((n: any) => Number(n.GirlInfo?.Girlid) === Number(g.UnlockGirlInfo.Girlid));
-          if (node && Number(node.State) !== 7) {
-            node.State = 6;
-            node.GirlInfo = { ...newGirlRecord(Number(g.UnlockGirlInfo.Girlid)), Familiarity: 0, NextCoin: 100, State: 6, UnlockCritFlag: 1 };
-            nodes.push(node);
-          }
-        }
-        if (girls.length) zoneEntries.push({ ZoneId: zone.ZoneId, ChangeRace: girls });
-        if (nodes.length) extra.GgraphPatch = { Gnode: nodes };
+      if (next && next.State & ST.LOCKED) {
+        openRace(zone.ZoneId, next, snap); main.NewRace.push(next);
+        if (next.LockQuestId) lockedUpdate.push({ ZoneId: zone.ZoneId, ChangeRace: [next] });
       }
       main.Progress = zone.Progress; main.DeltaProgress = deltaProgress;
     }
@@ -322,6 +337,12 @@ register('MsgBattleResultReq', (body, ctx: Ctx): Msg[] => {
         for (const g of girls) zoneEntries.push({ ZoneId: nz.ZoneId, NewRace: [g] });
       }
     }
+    // 캐릭터 연락처 해금 조건 재평가 (girlunlock.ts): 바뀐 캐릭터 레이스는 존별 ChangeRace, 노드는 GgraphPatch
+    if (firstWin) {
+      const u = evalGirlUnlocks(snap);
+      for (const [zid, rs] of u.races) zoneEntries.push({ ZoneId: zid, ChangeRace: rs });
+      if (u.nodes.length) extra.GgraphPatch = { Gnode: [...(extra.GgraphPatch?.Gnode ?? []), ...u.nodes] };
+    }
     const ep = !girlRace && firstWin ? epName(Number(zone.ZoneId), race, 'Win') : null;
     if (ep) extra.CallScript = [{ Name: ep, Girlid: 0, FmLevel: -1 }];
   } else {
@@ -339,7 +360,7 @@ register('MsgBattleResultReq', (body, ctx: Ctx): Msg[] => {
   // 차량 숙련도 (패배 +1, 승리 +2)
   car.DeltaMastery = 0;
   addMastery(car, win ? 2 : withdraw ? 0 : 1);
-  if (win) bumpProperty(snap, 'DQUEST_RACE', 1); // 일일 미션 '레이스 3회 승리' (기록 0 -> 1)
+  const propChanged = win && bumpProperty(snap, 'DQUEST_RACE', 1); // 일일 미션 '레이스 3회 승리' (기록 0 -> 1, 3 에서 멈춤)
   // 퀘스트 사건: 6 = 그 캐릭터를 태우고 레이스 n회, 2(순번 없음) = 존 승리 + 탑승 캐릭터, 30 = 히로인 드라이브
   if (!withdraw) {
     const pg = passengerOn ? Number(ui.PassengerGirl) : -1;
@@ -374,10 +395,11 @@ register('MsgBattleResultReq', (body, ctx: Ctx): Msg[] => {
       MyCarInfo: { ...car, FinalAttr: faBefore }, NewCars: [],
       UpdateGirlInfo: updateGirl, GgraphPatch: { Gnode: [] },
       Track: { TrackId: race.Track?.TrackId, Thema: race.Track?.Thema, LightingIndex: race.Track?.LightingIndex ?? 0 },
-      ...(passenger ? { Passenger: { GirlInfo: passenger } } : {}), PropertySet: snap.PropertySet,
+      ...(passenger ? { Passenger: { GirlInfo: passenger } } : {}), ...(propChanged ? { PropertySet: snap.PropertySet } : {}),
       ...extra,
     },
-  }, ...(questChanges.length ? [{ name: 'MsgUpdateNquest', body: { Seq: 2, NquestInfo: questChanges } }] : [])];
+  }, ...(questChanges.length ? [{ name: 'MsgUpdateNquest', body: { Seq: 2, NquestInfo: questChanges } }] : []),
+  ...(lockedUpdate.length ? [{ name: 'MsgUpdateData', body: { Seq: 3, UpdateData: { RaceZone: lockedUpdate } } }] : [])];
 });
 
 /** 숙련도 n 증가: MasteryCapacity 까지, 1씩 MasteryAttr 가장 낮은 능력치(동률이면 앞쪽). (기록 3->5, {1,1,1,0}->{2,1,1,1}) */
@@ -407,24 +429,33 @@ register('MsgRaceRewardReq', (body, ctx: Ctx): Msg[] => {
   const newCars: any[] = [];
   if (race.State & ST.CLEAR) {
     const ar = areaRace(zone.ZoneId, race.RaceIndex);
+    // 지급 항목: 아이템(Itemid·StackNum 포함)은 지급 순서대로, 코인·캐시는 맨 뒤 (실기록 3-12/3-13/3-14)
+    const cur: any[] = [];
+    const give = (id: number, n: number, part?: any) => {
+      if (part) { reward.ItemInfo.push(part); topItems.push(part); return; }
+      if (!grantItem(snap, id, n)) return;
+      if (id === 61001) { reward.Coin += n; cur.push({ Itemtype: id, Count: n, DeltaNum: n }); return; }
+      if (id === 61002) { reward.Cash += n; cur.push({ Itemtype: id, Count: n, DeltaNum: n }); return; }
+      const it = (snap.Items?.ItemInfo ?? []).find((x: any) => Number(x.Itemtype) === id);
+      if (it && Number(it.Itemtype) < 61000) {
+        reward.ItemInfo.push({ Itemid: it.Itemid, Itemtype: id, Count: n, StackNum: it.Count, DeltaNum: n });
+        topItems.push({ Itemid: it.Itemid, Itemtype: id, Count: n, StackNum: it.Count });
+      } else reward.ItemInfo.push({ Itemtype: id, Count: n, DeltaNum: n });
+    };
     if (race.FirstPlayReward && ar?.FirstPlayRewardItemID) {
       const id = Number(ar.FirstPlayRewardItemID), n = Number(ar.FirstPlayRewardNumItem) || 1;
       if (carDefOf(id)) {
         for (let i = 0; i < n; i++) { const c = newOwnedCar(snap, id); snap.Cars.CarInfo.push(c); reward.CarInfo.push(c); newCars.push(c); }
-      } else if (grantItem(snap, id, n)) {
-        reward.ItemInfo.push({ Itemtype: id, Count: n, DeltaNum: n });
-        if (id === 61001) reward.Coin += n;
-      }
+      } else give(id, n);
     }
+    // 레이스 칸 보상: 코인·숙련도(61xxx)는 매번 남고, 아이템(60xxx)은 한 번 받으면 사라진다 (실기록 2-14/2-15 유지, 3-12/3-13 null)
     if (race.ItemInfo?.Itemtype && race.DailyRewardTime === undefined) {
       const { Itemtype, Count } = race.ItemInfo;
-      if (grantItem(snap, Number(Itemtype), Number(Count))) {
-        reward.ItemInfo.push({ Itemtype, Count, DeltaNum: Count });
-        if (Number(Itemtype) === 61001) reward.Coin += Number(Count);
-      }
+      give(Number(Itemtype), Number(Count));
+      if (Number(Itemtype) < 61000) delete race.ItemInfo;
     }
     // 보상 상자 내용: 존 BattleArea.Parts 가중치(★1..5)가 있으면 그 등급 부품 1개, 모두 0 이면 코인 RewardCoin/2
-    //   (실기록: 존 1 Parts 0 -> 1-13·1-14 코인 300, 존 2 Parts [1,0,0,0,0] -> 2-12 ★1 부품)
+    //   (실기록: 존 1 Parts 0 -> 1-13·1-14 코인 300, 존 2·3 Parts [1,0,0,0,0] -> ★1 부품)
     if (Number(race.RewardBoxKind) === 1) {
       const w: number[] = (areaOf(zone.ZoneId)?.Parts ?? []).map(Number);
       const tot = w.reduce((a, b) => a + (b || 0), 0);
@@ -432,13 +463,14 @@ register('MsgRaceRewardReq', (body, ctx: Ctx): Msg[] => {
         let r = Math.random() * tot, g = 1;
         for (let i = 0; i < w.length; i++) { r -= w[i] || 0; if (r < 0) { g = i + 1; break; } }
         const def = randomPart(g);
-        if (def) { const p = grantPart(snap, def); reward.ItemInfo.push(p); topItems.push(p); }
+        if (def) give(0, 0, grantPart(snap, def));
       } else {
         const c = Math.floor((Number(race.RewardCoin) || 0) / 2);
-        if (c > 0) { grantItem(snap, 61001, c); reward.Coin += c; reward.ItemInfo.push({ Itemtype: 61001, Count: c, DeltaNum: c }); }
+        if (c > 0) give(61001, c);
       }
       reward.ContainerGrade = 1;
     }
+    reward.ItemInfo.push(...cur);
     race.State = (race.State & ~ST.CLEAR) | ST.PLAYABLE;
     race.FirstPlayReward = false;
     delete race.RewardBoxKind;

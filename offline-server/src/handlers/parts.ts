@@ -13,7 +13,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { register, type Msg } from '../rpc.js';
 import { updateQuest, refreshQuests } from '../quests.js';
-import { levelUp } from './battle.js';
+import { levelUp, unlockQuestRaces } from './battle.js';
 
 const TABLES = new URL('../../data/tables/', import.meta.url).pathname;
 const load = (n: string) => (existsSync(TABLES + n) ? JSON.parse(readFileSync(TABLES + n, 'utf8')) : null);
@@ -124,7 +124,11 @@ register('MsgCarSlotOpenReq', (body, ctx): Msg[] => {
 register('MsgUpdateNquestReq', (body, ctx): Msg[] => {
   const snap = ctx.store.getUser(ctx.session.accountId);
   if (!snap) return [{ name: 'MsgUpdateNquestAns', body: { Seq: 1, Result: 2 } }];
-  const out = updateQuest(snap, Number(body?.NquestInfo?.QuestId), Number(body?.NquestInfo?.State), levelUp);
+  const qid = Number(body?.NquestInfo?.QuestId), st = Number(body?.NquestInfo?.State);
+  const out = updateQuest(snap, qid, st, levelUp);
+  // 보상 수령(7)으로 잠금이 풀린 레이스 -> MsgUpdateData {UpdateData:{RaceZone:[{ZoneId, ChangeRace}]}} (실기록 10302 -> 3-14)
+  const opened = st === 7 && out.Result === 1 ? unlockQuestRaces(snap, qid) : [];
   ctx.store.putUser(ctx.session.accountId, snap);
-  return [{ name: 'MsgUpdateNquestAns', body: { Seq: 1, ...out } }];
+  return [{ name: 'MsgUpdateNquestAns', body: { Seq: 1, ...out } },
+    ...(opened.length ? [{ name: 'MsgUpdateData', body: { Seq: 2, UpdateData: { RaceZone: opened } } }] : [])];
 });

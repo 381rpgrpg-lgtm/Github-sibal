@@ -2,6 +2,7 @@
 // MsgUserData 는 계정 상태 스냅샷 전체. 저장된 유저가 없으면 시드(data/userdata-seed.json)를,
 // 시드도 없으면 신규계정 최소 스냅샷을 사용한다.
 import { readFileSync, existsSync } from 'node:fs';
+import { dailyReset } from '../daily.js';
 import { register, type Ctx, type Msg } from '../rpc.js';
 import { refreshQuests } from '../quests.js';
 
@@ -49,21 +50,16 @@ function loadSnapshot(ctx: Ctx): any {
   return fresh;
 }
 
-// 출석 보상(Daygift): 하루 1회만 내려보낸다. 같은 날 재로그인 시 Daygift 를 생략.
-function dailyGift(snap: any, ctx: Ctx): void {
-  const today = new Date().toISOString().slice(0, 10);
-  const last = ctx.store.getMeta(`daygift:${ctx.session.accountId}`);
-  if (snap.Daygift && last === today) {
-    // 빈 Daygift 는 빈 '획득 아이템' 팝업을 띄운다 → 필드 자체를 뺀다(클라이언트 기본값=0).
-    delete snap.Daygift;
-  } else if (snap.Daygift) {
-    ctx.store.setMeta(`daygift:${ctx.session.accountId}`, today);
-  }
+// 출석 보상(Daygift): 일일 초기화(daily.ts)가 일어난 로그인에만 MsgUserData 에 넣는다 (실기록: 그날 두 번째 로그인부터 없음).
+//   빈 Daygift 는 빈 '획득 아이템' 팝업을 띄우므로 초기화가 없으면 필드 자체를 뺀다.
+function dailyGift(snap: any): void {
+  const d = dailyReset(snap);
+  if (d) snap.Daygift = d.Daygift; else delete snap.Daygift;
 }
 
 register('MsgLoginReq', (_body, ctx): Msg[] => {
   const base = loadSnapshot(ctx);
-  dailyGift(base, ctx);
+  dailyGift(base);
   if (base.UserInfo) delete base.UserInfo.LevelUp;
   refreshQuests(base); // 조건이 맞는 퀘스트를 제시 상태로 (실계정 로그인 데이터에도 State 2 퀘스트가 들어 있음)
   ctx.store.putUser(ctx.session.accountId, base);

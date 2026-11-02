@@ -153,8 +153,9 @@ export function updateQuest(snap: any, questId: number, state: number, levelUp: 
       const it = (snap.Items?.ItemInfo ?? []).find((x: any) => Number(x.Itemtype) === Number(t));
       reward.ItemInfo.push(it ? { Itemid: it.Itemid, Itemtype: Number(t), Count: n, StackNum: it.Count, DeltaNum: n } : { Itemtype: Number(t), Count: n, DeltaNum: n });
     });
-    // 기록 순서: 61003(경험치) → 아이템 → 61001(코인)
-    reward.ItemInfo.sort((a: any, b: any) => (a.Itemtype === 61003 ? -1 : b.Itemtype === 61003 ? 1 : a.Itemtype === 61001 ? 1 : b.Itemtype === 61001 ? -1 : 0));
+    // 기록 순서: 61003(경험치) → 아이템 → 61001(코인)·61002(캐시) (실기록 10302, 10303)
+    const rank = (t: number) => (t === 61003 ? 0 : t === 61001 || t === 61002 ? 2 : 1);
+    reward.ItemInfo.sort((a: any, b: any) => rank(Number(a.Itemtype)) - rank(Number(b.Itemtype)));
     levelUp(snap);
     const offered = refreshQuests(snap).filter((x) => x !== rec);
     const uiOut = { ...ui };

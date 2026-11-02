@@ -46,9 +46,12 @@ export function famLevel(girlId: number, fam: number): number {
   return Math.min(lv, 4);
 }
 
-/** 캐릭터 NextCoin = 친밀도 단계 x 100 (실기록: 단계 1 -> 100, 2 -> 200, 3 -> 300). 친밀도가 바뀔 때마다 맞춘다. */
+/** 캐릭터 NextCoin = 100 x (친밀도 단계 + Rarity - 1). 실기록: Rarity 1 단계 1 -> 100, 2 -> 200, 3 -> 300,
+ *  Rarity 2 (20104) 단계 1 -> 200. 친밀도가 바뀔 때마다 맞춘다. */
 export function syncGirl(g: any) {
-  if (g && g.Girlid) g.NextCoin = 100 * famLevel(Number(g.Girlid), Number(g.Familiarity) || 0);
+  if (!g || !g.Girlid) return;
+  const rarity = Number(g.Rarity) || Number(girlDef(Number(g.Girlid))?.Rarity) || 1;
+  g.NextCoin = 100 * (famLevel(Number(g.Girlid), Number(g.Familiarity) || 0) + rarity - 1);
 }
 
 /** 탑승 캐릭터 능력치 보너스 (클라이언트 passengerBonus / GetPassengerNormalBonusAvailable).
@@ -90,13 +93,13 @@ export function finalAttr(snap: any, car: any): Record<string, number> {
   return out;
 }
 
-/** 레이스 상대 난이도 표시 (RelativeDifficulty). 실기록: 내 최종 능력치 합 / 상대 합 1.53 -> 1, 1.24·1.20·1.14 -> 2.
- *  경계값은 추정 (1.3 이상 1, 1.0 이상 2, 그 아래 3). */
+/** 레이스 상대 난이도 표시 (RelativeDifficulty). 실기록: 내 최종 능력치 합 / 상대 합 1.53 -> 1, 1.29·1.24·1.20·1.14·1.088 -> 2,
+ *  1.075·1.0·0.956 -> 3. 경계값은 그 사이에서 추정 (1.3 이상 1, 1.08 이상 2, 그 아래 3). */
 export function relativeDifficulty(mine: Record<string, number>, opp: any): number {
   const a = ATTRS.reduce((s, k) => s + (Number(mine[k]) || 0), 0);
   const b = ATTRS.reduce((s, k) => s + (Number(opp?.Attributes?.[k]) || 0), 0) || 1;
   const r = a / b;
-  return r >= 1.3 ? 1 : r >= 1.0 ? 2 : 3;
+  return r >= 1.3 ? 1 : r >= 1.08 ? 2 : 3;
 }
 
 /** 레이스 상대 차량: 차량 기본 능력치를 battleTable Opponent.Difficulty 합계에 맞춰 늘린다.

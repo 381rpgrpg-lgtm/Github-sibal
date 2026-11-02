@@ -161,6 +161,19 @@ register('MsgBuyProductReq', (body, ctx): Msg[] => {
   if (!si || !snap) return fail(R_UNAVAILABLE, id);
 
   const reason = (why: string) => { console.warn(`[shop] ${id} 구매 거절: ${why}`); return fail(R_UNAVAILABLE, id); };
+  // 실기록(2026-11-02): 숨김 상품(Hide 1, 75123) -> Result 2. ClearzoneID 미달(73018, 8구역) -> Result 2 + MsgPopup 안내.
+  //   형식 {Seq, Result 2, StoreItemId, Buycount, UserInfo}
+  const refuse = (popup?: string): Msg[] => [
+    { name: 'MsgBuyProductAns', body: { Seq: 1, Result: 2, StoreItemId: id, Buycount: Number(body?.Buycount) || 1, UserInfo: snap.UserInfo } },
+    ...(popup ? [{ name: 'MsgPopup', body: { Seq: 2, Title: '', Message: popup } }] : []),
+  ];
+  if (Number(si.Hide) === 1) return refuse();
+  const cz = Number(si.ClearzoneID) || 0;
+  if (cz) {
+    const z = (snap.RaceZones?.RaceZone ?? []).find((x: any) => Number(x.ZoneId) === cz);
+    const cleared = (z?.Race ?? []).some((r: any) => Number(r.RaceIndex) === 20 && Number(r.State) & 16);
+    if (!cleared) return refuse(`In order to purchase, [FF7FBD]Episode ${cz}[-]\nmust be cleared.`);
+  }
   if (si.GachaId) {
     const box = boxOdds?.boxes?.[String(id)];
     if (!box) return reason('상자 확률표 없음');

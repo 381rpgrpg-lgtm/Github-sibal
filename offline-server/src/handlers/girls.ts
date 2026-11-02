@@ -72,3 +72,21 @@ register('MsgFirstSelectReq', (body, ctx): Msg[] => {
     body: { Seq: 1, UserInfo: ui, Ggraph: snap.Ggraph, SelectGirl: g, GirlItemInfo: [] },
   }];
 });
+
+// 친밀도 코인 수령 (관계도에서 캐릭터별). 실기록 2건(2026-11-02, 20101·20207):
+//   요청 {GirlInfo: 클라이언트가 가진 캐릭터 레코드} -> {Result 1, GirlInfo(NextFamiliarityTime = 지금 + 12시간), UserInfo(Coin + NextCoin)}
+//   Familiarity 는 바뀌지 않는다. 시간 전 요청은 Result 2 (추정: 기록 없음).
+register('MsgCollectFamiliarityReq', (body, ctx): Msg[] => {
+  const snap = ctx.store.getUser(ctx.session.accountId);
+  const id = Number(body?.GirlInfo?.Girlid);
+  const g = (snap?.MyGirls?.MyGirlInfo ?? []).find((x: any) => Number(x.Girlid) === id && Number(x.State) === GIRL_OPEN);
+  const now = Date.now() / 1000;
+  if (!snap || !g) return [{ name: 'MsgCollectFamiliarityAns', body: { Result: 2 } }];
+  if (Number(g.NextFamiliarityTime) > now)
+    return [{ name: 'MsgCollectFamiliarityAns', body: { Result: 2, GirlInfo: g, UserInfo: snap.UserInfo } }];
+  const coin = Number(g.NextCoin) || 100;
+  snap.UserInfo.Coin = (Number(snap.UserInfo.Coin) || 0) + coin;
+  g.NextFamiliarityTime = Math.floor(now) + 12 * 3600;
+  ctx.store.putUser(ctx.session.accountId, snap);
+  return [{ name: 'MsgCollectFamiliarityAns', body: { Seq: 1, Result: 1, GirlInfo: g, UserInfo: snap.UserInfo } }];
+});
