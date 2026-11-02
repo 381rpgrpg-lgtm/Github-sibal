@@ -33,6 +33,8 @@ const TUT_DATE = 1024;
 const MULT: Record<number, number> = { 1: 0.5, 2: 0.75, 3: 1, 4: 1.25, 5: 1.5 };
 // 첫 장소 보너스: girlTable FirstDatePlaceBonus (20105·20101·20102 = 112, 20207 = 103). 실기록 두 건 모두 그 장소 첫 데이트.
 import { girlDef as gdef, table, syncGirl } from '../gamecalc.js';
+// 쿨타임: girlTable DateCoolTime(분, 20105 = 0.5 -> 30초). 쿨타임 중에는 클라이언트가 캐시 초기화 화면만 띄우고
+//   신청을 보내지 않는다 (사용자 확인 2026-11-02). 캐시 초기화 요청은 캐시 소비라 기록하지 않았다 -> 미구현.
 const COOLTIME_SEC = 30;
 
 interface Row { Id: number; ScriptName: string; FamiliarityLv: number; Step?: number; Function: string; TextTag?: string; Sound?: string;
@@ -220,7 +222,8 @@ register('MsgDateStartReq', (body, ctx): Msg[] => {
   const ticketItems: any[] = [];
   if (ticket) {
     const it = (snap.Items?.ItemInfo ?? []).find((x: any) => Number(x.Itemtype) === ticket && Number(x.Count) > 0);
-    if (!it) return fail(`티켓 ${ticket} 없음`); // 추정: 거절 코드 미확인
+    // 티켓이 없으면 클라이언트가 '입장 불가'를 띄우고 요청을 보내지 않는다 (사용자 확인 2026-11-02). 아래는 안전장치.
+    if (!it) return fail(`티켓 ${ticket} 없음`);
     it.Count = Number(it.Count) - 1;
     ticketItems.push({ Itemid: it.Itemid, Itemtype: ticket, Count: it.Count, StackNum: it.Count });
     if (it.Count <= 0) snap.Items.ItemInfo = snap.Items.ItemInfo.filter((x: any) => x !== it);
