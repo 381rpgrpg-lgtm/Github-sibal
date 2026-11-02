@@ -142,16 +142,21 @@ register('MsgBattleStartReq', (body, ctx: Ctx): Msg[] => {
   // 캐릭터 레이스 시작 시 UnlockRace 튜토리얼 비트 (실기록: 2-25 시작 응답에서 Completion |= 4096)
   if (isGirlRace(race)) ui.Completion = Number(ui.Completion) | TUT_UNLOCK_RACE;
   race.TryCount = (Number(race.TryCount) || 0) + 1;
-  ctx.store.setMeta(`battle:${ctx.session.accountId}`, JSON.stringify({ zone: body.ZoneId, race: body.BattleId, level: body.RaceLevel ?? 1, at: now() }));
+  // 니트로 아이템(60022 'Nitro_0'): 가지고 있으면 시작 응답 NitroReadyNum 1, 결과 때 1개 소모 (실기록 2026-11-02 3-5:
+  //   시작 NitroReadyNum 1, 결과 최상위 ItemInfo {Itemid, Itemtype 60022, StackNum 0}). 한 번에 1개만 쓰는 것은 추정.
+  const nitroItem = (snap.Items?.ItemInfo ?? []).find((x: any) => Number(x.Itemtype) === 60022 && Number(x.Count) > 0);
+  const nitroReady = nitroItem ? 1 : 0;
+  ctx.store.setMeta(`battle:${ctx.session.accountId}`, JSON.stringify({ zone: body.ZoneId, race: body.BattleId, level: body.RaceLevel ?? 1, at: now(), nitro: nitroReady }));
   ctx.store.putUser(ctx.session.accountId, snap);
   const forceWin = !!(ctx.cheat.enabled && ctx.cheat.forceWinBattles);
   const girlRace = isGirlRace(race);
-  const ep = girlRace ? null : epName(Number(body.ZoneId), race, 'Start');
+  // 시작 대본은 아직 이기지 못한 레이스에만 (실기록: 이미 이긴 1-2 재도전 시작 응답에 CallScript 없음)
+  const ep = girlRace || race.State & ST.WIN ? null : epName(Number(body.ZoneId), race, 'Start');
   const fa = finalAttr(girlRace ? { ...snap, UserInfo: { ...ui, PassengerGirl: -1 } } : snap, car);
   return [{
     name: 'MsgBattleStartAns',
     body: {
-      Seq: 1, Result: 1, UserInfo: ui, NitroReadyNum: 0, Passenger: girlRace ? -1 : ui.PassengerGirl ?? 0, GirlsSpecialSkill: [],
+      Seq: 1, Result: 1, UserInfo: ui, NitroReadyNum: nitroReady, Passenger: girlRace ? -1 : ui.PassengerGirl ?? 0, GirlsSpecialSkill: [],
       RaceInfo: race, RaceType: body.RaceType ?? 1, ZoneId: body.ZoneId, BattleId: body.BattleId,
       // 시작 응답 Track = trackTable 전체 + (보스 외) ClosedTrack + Thema/LightingIndex (실기록 2-12, 2-20)
       Track: { ...(track(race.Track?.TrackId) ?? {}), ...(race.Boss ? {} : { ClosedTrack: false }), Thema: race.Track?.Thema, LightingIndex: race.Track?.LightingIndex ?? 0 },
@@ -263,7 +268,8 @@ register('MsgBattleResultReq', (body, ctx: Ctx): Msg[] => {
       Bonus: (Number(prev.Bonus) || 0) | earned,
     };
     clearTop = {
-      Grade: grade, Flag: [64, 128, 256].filter((_, i) => fresh & (1 << i)).reduce((a, b) => a | b, 0),
+      // Flag: 이번에 새로 받은 보너스 S64 A128 B256, 새로 받은 게 없으면 이미 받은 보너스 비트(1|2|4) (실기록 1-2 재도전: 7)
+      Grade: grade, Flag: fresh ? [64, 128, 256].filter((_, i) => fresh & (1 << i)).reduce((a, b) => a | b, 0) : Number(prev.Bonus) || 0,
       RewardInfo: { Coin: bonusCoin, Charexp: 0, Cash: bonusCash, Familiartity: 0, ItemInfo: [], CarInfo: [] },
     };
   }
@@ -281,6 +287,20 @@ register('MsgBattleResultReq', (body, ctx: Ctx): Msg[] => {
     }
   }
 
+  // 일일 보상 레이스: DailyRewardTime 이 남아 있으면 승리 시 캐시 1, DailyRewardTime 0 (실기록 2026-11-02 1-2: RewardInfo.Cash 1,
+  //   Race.DailyRewardTime 0, 등급 보너스 없음. 지도에서 지폐 아이콘으로 표시)
+  if (win && Number(race.DailyRewardTime) > Date.now() / 1000) { bonusCash += 1; race.DailyRewardTime = 0; }
+  // 니트로 아이템 소모 (시작 때 NitroReadyNum 1 이었으면)
+  const resultItems: any[] = [];
+  try {
+    const meta = JSON.parse(ctx.store.getMeta(`battle:${ctx.session.accountId}`) || '{}');
+    const it = meta.nitro && (snap.Items?.ItemInfo ?? []).find((x: any) => Number(x.Itemtype) === 60022 && Number(x.Count) > 0);
+    if (it && !withdraw) {
+      it.Count = Number(it.Count) - 1;
+      resultItems.push({ Itemid: it.Itemid, Itemtype: 60022, StackNum: it.Count });
+      if (it.Count <= 0) snap.Items.ItemInfo = snap.Items.ItemInfo.filter((x: any) => x !== it);
+    }
+  } catch { /* 메타 없음 */ }
   const coin = raceCoin + bonusCoin + bossCoin;
   ui.Cash = (Number(ui.Cash) || 0) + bonusCash;
   const xp = win ? Number(race.RewardXP) || 0 : Math.floor((Number(race.RewardXP) || 0) * 0.3);
@@ -314,6 +334,8 @@ register('MsgBattleResultReq', (body, ctx: Ctx): Msg[] => {
       }
       main.Progress = zone.Progress; main.DeltaProgress = deltaProgress;
     }
+    // 재승리: 주 구역 항목에도 NewRace [], Progress, DeltaProgress 0 (실기록 1-2 재도전)
+    if (!firstWin && !boss && !girlRace) { main.NewRace = []; main.Progress = zone.Progress; main.DeltaProgress = 0; }
     if (firstWin && girlRace) {
       // 캐릭터 해금 (실기록 2-25: UnlockGirlInfo 전체, NewGirl, GgraphPatch, DelRace, Completion |= 4096)
       const gid = Number(race.UnlockGirlInfo?.Girlid ?? areaRace(zone.ZoneId, race.RaceIndex)?.GirlId);
@@ -390,7 +412,7 @@ register('MsgBattleResultReq', (body, ctx: Ctx): Msg[] => {
     body: {
       Seq: 1, Result: 1, IsPlayerWin: win, UserInfo: uiOut,
       RewardInfo: { Coin: rewardCoin, Charexp: xp, Cash: bonusCash, Familiartity: fam, ItemInfo: [], CarInfo: rewardCars },
-      BattleScore: withdraw ? 0 : Number(body.BattleScore) || 0, ItemInfo: [], Race: race,
+      BattleScore: withdraw ? 0 : Number(body.BattleScore) || 0, ItemInfo: resultItems, Race: race,
       RaceZone: zoneEntries,
       ...(clearTop ? { ClearRec: clearTop } : {}),
       RaceAction: { Action: action, ComboCount: Number(body.ComboCount) || 0 },
@@ -400,7 +422,7 @@ register('MsgBattleResultReq', (body, ctx: Ctx): Msg[] => {
       MyTimeRecord: withdraw ? 0 : body.TimeRecord, OpponentTimeRecord: withdraw ? 0 : body.OpponentTimeRecord, LeftBoost: body.LeftBoost ?? 0,
       MyMaxSpeed: body.LinearMaxSpeed, MyMaxDriftSpeed: body.CornerMaxSpeed, Withdraw: withdraw,
       ...(win ? {} : { RetryFuel: Number(car.FuelConsume) || 20 }),
-      MyCarInfo: { ...car, FinalAttr: faBefore }, NewCars: [],
+      MyCarInfo: { ...car, FinalAttr: faBefore }, NewCars: rewardCars, // 실기록 3-20: 보스 보상 차량이 NewCars 에도
       UpdateGirlInfo: updateGirl, GgraphPatch: { Gnode: [] },
       Track: { TrackId: race.Track?.TrackId, Thema: race.Track?.Thema, LightingIndex: race.Track?.LightingIndex ?? 0 },
       ...(passenger ? { Passenger: { GirlInfo: passenger } } : {}), ...(propChanged ? { PropertySet: snap.PropertySet } : {}),
@@ -435,6 +457,7 @@ register('MsgRaceRewardReq', (body, ctx: Ctx): Msg[] => {
   const reward: any = { Coin: 0, Charexp: 0, Cash: 0, Familiartity: 0, ItemInfo: [], CarInfo: [] };
   const topItems: any[] = [];
   const newCars: any[] = [];
+  let masteryCar: any = null;
   if (race.State & ST.CLEAR) {
     const ar = areaRace(zone.ZoneId, race.RaceIndex);
     // 지급 항목: 아이템(Itemid·StackNum 포함)은 지급 순서대로, 코인·캐시는 맨 뒤 (실기록 3-12/3-13/3-14)
@@ -479,6 +502,11 @@ register('MsgRaceRewardReq', (body, ctx: Ctx): Msg[] => {
       reward.ContainerGrade = 1;
     }
     reward.ItemInfo.push(...cur);
+    const gotMastery = reward.ItemInfo.find((x: any) => Number(x.Itemtype) === 61005);
+    if (gotMastery) {
+      const c = (snap.Cars?.CarInfo ?? []).find((x: any) => Number(x.Carid) === Number(snap.UserInfo?.Currentcar));
+      if (c) masteryCar = { ...c, DeltaMastery: Number(gotMastery.Count) || 0 };
+    }
     race.State = (race.State & ~ST.CLEAR) | ST.PLAYABLE;
     race.FirstPlayReward = false;
     delete race.RewardBoxKind;
@@ -490,7 +518,9 @@ register('MsgRaceRewardReq', (body, ctx: Ctx): Msg[] => {
     body: {
       Seq: 1, Result: 1, Race: before,
       RaceZone: [{ ZoneId: zone.ZoneId, ChangeRace: [{ ...race, RewardBoxKind: null, ItemInfo: race.ItemInfo ?? null }] }],
-      RewardInfo: reward, ItemInfo: topItems, NewCars: newCars, UserInfo: uiOut,
+      // 받은 것이 없으면 RewardInfo 를 싣지 않는다 (실기록 1-2 재도전 보상 수령). 숙련도를 받으면 MyCarInfo(DeltaMastery) (실기록 3-5)
+      ...(reward.ItemInfo.length || reward.CarInfo.length || reward.Coin || reward.Cash ? { RewardInfo: reward } : {}),
+      ItemInfo: topItems, ...(masteryCar ? { MyCarInfo: masteryCar } : {}), NewCars: newCars, UserInfo: uiOut,
     },
   }];
 });

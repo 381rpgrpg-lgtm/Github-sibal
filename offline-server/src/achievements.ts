@@ -7,14 +7,14 @@
 // 진행 알림: 바뀐 레코드만 MsgNotifyEvent {Memoryset:{Memory:[...]}} 로 응답의 첫 메시지 뒤에 붙인다 (Id 오름차순).
 //
 // 조건별 진행(기록 근거 / 추정 표시):
-//   101 레이스 승리 +1            105 PerfectStart(승리 시) +1      108 NitroUseNum 합 (패배 포함, 기록)
+//   101 레이스 승리 +1            104 Crazy(ExcellentCnt>0) 승리 +1   105 PerfectStart(승리 시) +1      108 NitroUseNum 합 (패배 포함, 기록)
 //   106 LinearMaxSpeed 최대(버림) 107 CornerMaxSpeed 최대(버림)
 //   102 구역 보스 처치(보스 레이스 승리 비트)  103 보스 처치 시 그 구역 모든 레이스 ClearRec.Grade 1(S) (추정: 기록은 모두 S)
 //   201 차량 획득 대수 +n (새 Carid)  202 그 등급 차량 획득(추정)  203 그 차종 획득(추정)
 //   204 차량 강화 +1   205 강화 UpgradeSuccess +1   208 부품 강화(조합) +1
 //   302 데이트 결과(DateResult) 가 Value2 인 데이트 +1   303 연락처 수(열린 캐릭터 - 첫 캐릭터)   304 CG 수(추정: 기록상 히로인 수와 같이 증가)
 //   309 히로인 의상(GirlItems) 수   403 일일 미션 보상 수령 +1   401 플레이어 레벨   402 획득 코인 누계 (응답 전후 코인 증가분; 소비와 같은 요청이면 순증가만)
-// 미구현(진행 없음): 104 Crazy 승리, 109 주간 레이스 아이템, 110 월드 투어, 113, 206 차량 조합, 207, 209, 301, 305, 306, 308, 404~407.
+// 미구현(진행 없음): 109 주간 레이스 아이템, 110 월드 투어, 113, 206 차량 조합, 207, 209, 301, 305, 306, 308, 404~407.
 import { table, carDefOf } from './gamecalc.js';
 
 type Ach = { Index: number; Condition: number; Value1?: number; Value2?: number; RewardIndex?: number; RewardValue?: number };
@@ -67,6 +67,8 @@ export function achAfter(snap: any, before: AchBefore, name: string, req: any, m
     const win = !!req?.IsPlayerWin;
     if (win) apply(snap, 101, (p) => p + 1, changed);
     if (win && req?.PerfectStart) apply(snap, 105, (p) => p + 1, changed);
+    // 104 Crazy 승리: 승리 + ExcellentCnt(Crazy 판정 수) > 0 (실기록 2026-11-02 보스 3-20: ExcellentCnt 2 -> 1301 Count 1)
+    if (win && Number(req?.ExcellentCnt) > 0) apply(snap, 104, (p) => p + 1, changed);
     const lin = Math.floor(Number(req?.LinearMaxSpeed) || 0), cor = Math.floor(Number(req?.CornerMaxSpeed) || 0);
     if (lin > 0) apply(snap, 106, (p) => Math.max(p, lin), changed);
     if (cor > 0) apply(snap, 107, (p) => Math.max(p, cor), changed);
