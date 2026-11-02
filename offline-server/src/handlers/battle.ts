@@ -84,7 +84,7 @@ export function bumpProperty(snap: any, name: string, by: number): boolean {
     const vmax = (n: string) => Number((table('vconstTable.json')?.Vconst ?? []).find((c: any) => c?.Name === `${n}_MAX`)?.Dval) || 1;
     const done = ['DQUEST_RACE', 'DQUEST_DATE', 'DQUEST_PARTSUP'].every((n) =>
       Number(snap.PropertySet.Property.find((x: any) => x.PropertyName === n)?.Nvalue) >= vmax(n));
-    if (dq && done && Number(dq.Nvalue) === 1) dq.Nvalue = 2;
+    if (dq && done && Number(dq.Nvalue) === 1) dq.Nvalue = 2; // 보상 수령 후 0 (실측)
   }
   return p.Nvalue !== prev;
 }

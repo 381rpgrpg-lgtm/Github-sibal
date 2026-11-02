@@ -36,6 +36,8 @@ import { girlDef as gdef, table, syncGirl } from '../gamecalc.js';
 // 쿨타임: girlTable DateCoolTime(분, 20105 = 0.5 -> 30초). 쿨타임 중에는 클라이언트가 캐시 초기화 화면만 띄우고
 //   신청을 보내지 않는다 (사용자 확인 2026-11-02). 캐시 초기화 요청은 캐시 소비라 기록하지 않았다 -> 미구현.
 const COOLTIME_SEC = 30;
+/** 캐릭터별 쿨타임(초) = girlTable DateCoolTime(분) x 60, 없으면 30초 */
+const coolSec = (girl: number) => { const m = Number(girls?.get(girl)?.DateCoolTime); return m > 0 ? Math.round(m * 60) : COOLTIME_SEC; };
 
 interface Row { Id: number; ScriptName: string; FamiliarityLv: number; Step?: number; Function: string; TextTag?: string; Sound?: string;
   Parameter1?: string; Parameter2?: string; Parameter3?: string; Parameter4?: string; Parameter5?: string }
@@ -153,8 +155,13 @@ function eventChunk(girl: number, lv: number, fam: number, tutorial: boolean, qI
 const hasQuestions = (girl: number, sname: string, lv: number) => questionIns(girl, sname, lv, 1, 1).length > 0;
 /** 장소 선호 (girlTable PreferencePlaceA / DislikePlace). 실기록: 20105 영화관 = 선호 -> 시작 대본 CHANGE 뒤 DATE_NOTICE date_notice_7
  *  ['1.5','2'] + Date_Event_Preference_A 덩어리. 싫어하는 장소는 date_notice_9 + Date_Event_Npreferred (추정: 기록 없음) */
-function placeMood(girl: number, placeId: number): { notice: any; event: string } | null {
+function placeMood(girl: number, placeId: number, lastPlace = 0): { notice: any; event: string } | null {
   const d = girls!.get(girl) ?? {};
+  // 직전과 같은 장소 (실기록 20101 공원 연속): date_notice_8 ['1.5','3'] + Date_Boring. vconst IgnoreSameDatePlace 장소는 제외.
+  //   선호·비선호보다 먼저 본다(추정: 겹친 기록 없음)
+  const ignore: number[] = (table('vconstTable.json')?.Vconst ?? []).find((c: any) => c?.Name === 'IgnoreSameDatePlace')?.Val ?? [];
+  if (lastPlace && lastPlace === placeId && !ignore.includes(placeId))
+    return { notice: { Function: 'DATE_NOTICE', TextTag: 'date_notice_8', Parameter: ['1.5', '3'] }, event: 'Date_Boring' };
   if (Number(d.PreferencePlaceA) === placeId) return { notice: { Function: 'DATE_NOTICE', TextTag: 'date_notice_7', Parameter: ['1.5', '2'] }, event: 'Date_Event_Preference_A' };
   if (Number(d.DislikePlace) === placeId) return { notice: { Function: 'DATE_NOTICE', TextTag: 'date_notice_9', Parameter: ['1.5', '3'] }, event: 'Date_Event_Npreferred' };
   return null;
@@ -229,7 +236,7 @@ register('MsgDateStartReq', (body, ctx): Msg[] => {
     if (it.Count <= 0) snap.Items.ItemInfo = snap.Items.ItemInfo.filter((x: any) => x !== it);
   }
   ui.Coin -= price;
-  const mood = placeMood(girl, Number(place.Id));
+  const mood = placeMood(girl, Number(place.Id), Number(g.LastDatePlace) || 0);
   const tutorial = !(Number(ui.Completion) & TUT_DATE);
   const chunks: any[] = [];
   let st: DateState;
@@ -238,7 +245,12 @@ register('MsgDateStartReq', (body, ctx): Msg[] => {
   const moodChunk = mood && !tutorial && scriptRows(girl, mood.event, lv).length
     ? chunk(girl, mood.event, lv, scriptRows(girl, mood.event, lv).map((r) => {
       const o = toIns(r);
-      if (o.Function === 'CHANGE' && o.Parameter) { if (o.Parameter[0] === 'ND') o.Parameter[0] = String(place.Id); o.Parameter = [...o.Parameter.slice(0, 3), 'face_basic', 'NONE']; }
+      // CHANGE: ND -> 장소 Id, 표정이 없으면 face_basic, 5번째 = 장소 AmbiSound 또는 NONE (실기록 Preference_A·Date_Boring)
+      if (o.Function === 'CHANGE' && o.Parameter) {
+        if (o.Parameter[0] === 'ND') o.Parameter[0] = String(place.Id);
+        if (o.Parameter.length < 4) o.Parameter.push('face_basic');
+        if (o.Parameter.length < 5) o.Parameter.push(place.AmbiSound || 'NONE');
+      }
       return o;
     })) : null;
   const events = moodChunk ? [mood!.event] : [];
@@ -266,6 +278,22 @@ register('MsgDateStartReq', (body, ctx): Msg[] => {
     { name: 'MsgDateStartAns', body: { Seq: 1, Result: 1, UserInfo: ui, GirlInfo: { Girlid: girl }, DatePlace: place.Id, ItemInfo: ticketItems } },
     { name: 'MsgLoadScript', body: { Seq: 2, Script: { Chunk: chunks } } },
   ];
+});
+
+// 데이트 중 나가기. 실기록(2026-11-02, 20101 공원 시작 직후): 요청 {} -> MsgDateResultAns 하나
+//   {Seq, GirlInfo(DateCoolTime = 지금 + 쿨타임, 그 밖은 그대로), UserInfo, GgraphPatch {Gnode []}, CallScript [], GirlMemorySet}.
+//   장소 비용(코인 100)은 돌려주지 않고, 친밀도·NthDate·일일 미션도 그대로.
+register('MsgDateStopReq', (_body, ctx): Msg[] => {
+  init();
+  const snap = ctx.store.getUser(ctx.session.accountId);
+  const st = getState(ctx);
+  const g = snap && st && myGirl(snap, st.girl);
+  setState(ctx, null);
+  if (!snap || !g) return [{ name: 'MsgDateResultAns', body: { Seq: 1, ...(snap ? { UserInfo: snap.UserInfo } : {}) } }];
+  g.DateCoolTime = Math.floor(Date.now() / 1000) + coolSec(Number(g.Girlid));
+  ctx.store.putUser(ctx.session.accountId, snap);
+  return [{ name: 'MsgDateResultAns', body: { Seq: 1, GirlInfo: g, UserInfo: snap.UserInfo, GgraphPatch: { Gnode: [] }, CallScript: [],
+    GirlMemorySet: snap.GirlMemorySet ?? { GirlMemory: [], Version: 1 } } }];
 });
 
 register('MsgScriptProgressReq', (body, ctx): Msg[] => {
@@ -346,7 +374,7 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
     g.SameDateCnt = Number(g.LastDatePlace) === st.place ? (Number(g.SameDateCnt) || 0) + 1 : 0;
     g.NthDate = (Number(g.NthDate) || 0) + 1;
     g.LastDatePlace = st.place;
-    g.DateCoolTime = Math.floor(Date.now() / 1000) + COOLTIME_SEC;
+    g.DateCoolTime = Math.floor(Date.now() / 1000) + coolSec(Number(g.Girlid));
     g.DatingState ??= [];
     const ds = g.DatingState.find((x: any) => Number(x.Placeid) === st.place);
     if (ds) ds.MaxRecord = Math.max(Number(ds.MaxRecord) || 0, sat); else g.DatingState.push({ Placeid: st.place, MaxRecord: sat });
@@ -533,7 +561,7 @@ function departmentProgress(snap: any, g: any, st: DateState, body: any, head: a
       GirlInfo: { Girlid: girl, Familiarity: g.Familiarity, DeltaFamiliarity: gift?.delta ?? 0 } } }];
   }
   if (depth === 0 && index === st.finalIndex) {
-    g.DateCoolTime = Math.floor(Date.now() / 1000) + COOLTIME_SEC;
+    g.DateCoolTime = Math.floor(Date.now() / 1000) + coolSec(Number(g.Girlid));
     snap.GirlMemorySet ??= { GirlMemory: [], Version: 1 };
     let gm = snap.GirlMemorySet.GirlMemory.find((x: any) => Number(x.Girlid) === girl);
     if (!gm) { gm = { Girlid: girl, Memory: [] }; snap.GirlMemorySet.GirlMemory.push(gm); }

@@ -51,7 +51,7 @@ export function dailyReset(snap: any, nowMs = Date.now()): DailyResult | null {
   const now = nowMs / 1000;
   if (Number(dq.Tvalue) && now < Number(dq.Tvalue)) return null;
   const next = nextResetSec(nowMs);
-  dq.Nvalue = 1; // 일일 미션 진행 중 (2 = 모두 달성, 3 = 보상 수령 추정)
+  dq.Nvalue = 1; // 일일 미션 진행 중 (2 = 모두 달성, 0 = 보상 수령 완료: 실측)
   dq.Tvalue = next;
   for (const n of ['DQUEST_RACE', 'DQUEST_DATE', 'DQUEST_PARTSUP']) prop(snap, n).Nvalue = 0;
   snap.dailyRaceDay = laDayNumber(nowMs);

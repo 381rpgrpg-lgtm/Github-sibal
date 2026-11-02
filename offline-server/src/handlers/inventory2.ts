@@ -159,21 +159,23 @@ register('MsgCosmeticCollectionReq', (_b, ctx): Msg[] => {
     Exchange: seasonal.filter((d) => d.rarity !== 'common').map((d) => String(d.id)) } }];
 });
 
-// ── 일일 미션 보상 MsgGetDailyQuestRewardReq -> {Seq, UserInfo}
-//   실측: 레이스 3/3, 데이트 0, 강화 1 상태(DQUEST 1)에서 보상 없이 UserInfo 만. 세 미션 모두 달성하면 DQUEST 2 (실측).
-//   추정: DQUEST 2 일 때 vconst DQUEST_REWARD_COIN(1000)·DQUEST_REWARD_CASH(5) 지급 후 DQUEST 3, 응답에 RewardInfo·PropertySet.
+// ── 일일 미션 보상 MsgGetDailyQuestRewardReq. 실측 2건:
+//   DQUEST 1(미완료) -> {Seq, UserInfo} 만.
+//   DQUEST 2(레이스 3·데이트 3·강화 1 모두 달성, 2026-11-02) -> 코인 1000 + 캐시 10, DQUEST 0,
+//     {Seq, RewardInfo{Coin, Charexp 0, Cash, Familiartity 0, ItemInfo[{61001},{61002}], CarInfo []}, UserInfo, PropertySet}.
+//   vconst DQUEST_REWARD_CASH 는 5 이지만 실서버는 10 을 줬다 -> 기록값 사용. 업적 403(일일 미션 완료) +1 은 achievements.ts.
 register('MsgGetDailyQuestRewardReq', (_b, ctx): Msg[] => {
   const snap = ctx.store.getUser(ctx.session.accountId);
   const dq = (snap?.PropertySet?.Property ?? []).find((x: any) => x.PropertyName === 'DQUEST');
   if (!snap || !dq || Number(dq.Nvalue) !== 2) return [{ name: 'MsgGetDailyQuestRewardAns', body: { Seq: 1, ...(snap ? { UserInfo: snap.UserInfo } : {}) } }];
-  const v = (n: string, d: number) => Number((table('vconstTable.json')?.Vconst ?? []).find((c: any) => c?.Name === n)?.Dval) || d;
-  const coin = v('DQUEST_REWARD_COIN', 1000), cash = v('DQUEST_REWARD_CASH', 5);
+  const coin = Number((table('vconstTable.json')?.Vconst ?? []).find((c: any) => c?.Name === 'DQUEST_REWARD_COIN')?.Dval) || 1000, cash = 10;
   snap.UserInfo.Coin = (Number(snap.UserInfo.Coin) || 0) + coin;
   snap.UserInfo.Cash = (Number(snap.UserInfo.Cash) || 0) + cash;
-  dq.Nvalue = 3;
+  dq.Nvalue = 0;
   ctx.store.putUser(ctx.session.accountId, snap);
-  return [{ name: 'MsgGetDailyQuestRewardAns', body: { Seq: 1, Result: 1, UserInfo: snap.UserInfo, PropertySet: snap.PropertySet,
-    RewardInfo: { Coin: coin, Cash: cash, Charexp: 0, ItemInfo: [{ Itemtype: 61001, Count: coin, DeltaNum: coin }, { Itemtype: 61002, Count: cash, DeltaNum: cash }], CarInfo: [] } } }];
+  return [{ name: 'MsgGetDailyQuestRewardAns', body: { Seq: 1,
+    RewardInfo: { Coin: coin, Charexp: 0, Cash: cash, Familiartity: 0, ItemInfo: [{ Itemtype: 61001, Count: coin, DeltaNum: coin }, { Itemtype: 61002, Count: cash, DeltaNum: cash }], CarInfo: [] },
+    UserInfo: snap.UserInfo, PropertySet: snap.PropertySet } }];
 });
 
 // ── 주간 레이스 정보 MsgGetWRaceInfoReq -> {WraceSet{WSeasonId, StartDate, EndDate, WRace[...]}, MyWRaceRec{MyRank[...]}, UserInfo}
