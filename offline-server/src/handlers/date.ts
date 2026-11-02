@@ -95,7 +95,8 @@ function placeIns(girl: number, place: any, lv: number) {
     const o = toIns(r);
     if (o.Function === 'CHANGE' && o.Parameter) {
       if (o.Parameter[0] === 'ND') o.Parameter[0] = String(place.Id);
-      if (place.AmbiSound && o.Parameter.length < 5) o.Parameter.push(place.AmbiSound);
+      // 5번째 인자 = 장소 AmbiSound, 없으면 'NONE' (실기록: 공원 se_date_ambi_outdoor_2, 영화관·경기장 NONE)
+      if (o.Parameter.length < 5) o.Parameter.push(place.AmbiSound || 'NONE');
     }
     return o;
   });
@@ -131,8 +132,35 @@ function chatChunk(girl: number, lv: number, fam: number, tutorial: boolean, qIn
   return { name, chunk: chunk(girl, name, lv, ins) };
 }
 
+// 문항 뒤(또는 문항 없는 장소에서 시작 때) 붙는 사건. 실기록 2026-11-02: Date_Event_Chat_A(문항 있음), Date_Event_Chat_B(20105 단계 3, 문항 없음),
+//   Date_Event_Hint(문항 없음), Date_Event_Gift(GIFT 행에 Index 5 -> Depth 1 Index 5 요청에 GiftFromGirl). 고르는 규칙은 추정: 조건 맞는 채팅 + Hint + Gift 중 균등.
+function eventChunk(girl: number, lv: number, fam: number, tutorial: boolean, qIndex: number) {
+  if (tutorial) { const c = chatChunk(girl, lv, fam, true, qIndex); return c ? { ...c, ask: true } : null; }
+  const d = girls!.get(girl) ?? {};
+  const pool = ['A', 'B', 'C', 'D', 'E'].filter((L) => d[`ChatCondition${L}`] !== undefined && fam >= Number(d[`ChatCondition${L}`]))
+    .map((L) => `Date_Event_Chat_${L}`).concat(['Date_Event_Hint', 'Date_Event_Gift'])
+    .filter((n) => scriptRows(girl, n, lv).length);
+  const name = pool[Math.floor(Math.random() * pool.length)];
+  if (!name) return null;
+  const rs = scriptRows(girl, name, lv);
+  const ask = rs.some((r) => r.Function === 'QUESTION' || r.Function === 'GIFT');
+  const ins = rs.map((r) => toIns(r, r.Function === 'QUESTION' || r.Function === 'GIFT' ? { Index: qIndex } : {}));
+  return { name, chunk: chunk(girl, name, lv, ins), ask, gift: rs.some((r) => r.Function === 'GIFT') };
+}
+/** 장소에 문항(Stage 대본)이 있는지. 티켓 장소(경기장 등)는 없다 -> 시작·사건·종료 후 바로 결과 (실기록 20105 경기장) */
+const hasQuestions = (girl: number, sname: string, lv: number) => questionIns(girl, sname, lv, 1, 1).length > 0;
+/** 장소 선호 (girlTable PreferencePlaceA / DislikePlace). 실기록: 20105 영화관 = 선호 -> 시작 대본 CHANGE 뒤 DATE_NOTICE date_notice_7
+ *  ['1.5','2'] + Date_Event_Preference_A 덩어리. 싫어하는 장소는 date_notice_9 + Date_Event_Npreferred (추정: 기록 없음) */
+function placeMood(girl: number, placeId: number): { notice: any; event: string } | null {
+  const d = girls!.get(girl) ?? {};
+  if (Number(d.PreferencePlaceA) === placeId) return { notice: { Function: 'DATE_NOTICE', TextTag: 'date_notice_7', Parameter: ['1.5', '2'] }, event: 'Date_Event_Preference_A' };
+  if (Number(d.DislikePlace) === placeId) return { notice: { Function: 'DATE_NOTICE', TextTag: 'date_notice_9', Parameter: ['1.5', '3'] }, event: 'Date_Event_Npreferred' };
+  return null;
+}
+
 interface DateState { girl: number; place: number; lv: number; tutorial: boolean; likes: number; dislikes: number;
   chat: string | null; chatSat: number; resultIndex: number; finalIndex: number; satisfaction?: number; end?: string;
+  events?: string[]; gift?: boolean;
   dept?: { scripts: string[]; gift?: { index: number; count: number; delta: number } } }
 const key = (ctx: Ctx) => `date:${ctx.session.accountId}`;
 const getState = (ctx: Ctx): DateState | null => { const s = ctx.store.getMeta(key(ctx)); return s ? JSON.parse(s) : null; };
@@ -143,7 +171,30 @@ register('MsgDateProposeReq', (body, ctx): Msg[] => {
   const snap = ctx.store.getUser(ctx.session.accountId);
   const g = snap && myGirl(snap, body?.GirlInfo?.Girlid);
   if (!g) return [{ name: 'MsgDateProposeAns', body: { Seq: 1, Result: 2 } }];
-  return [{ name: 'MsgDateProposeAns', body: { Seq: 1, Result: 1, GirlInfo: g, UserInfo: snap.UserInfo } }];
+  // 차량 반응 (실기록: ★2 차량 10602 + 20105(Rarity 1) -> Car_Reaction_Good + DATE_NOTICE date_notice_3 ['1.5','2'],
+  //   ★1 차량 + Rarity 1 -> 없음. 추정: 차량 등급 > Rarity 면 Good, < 면 Bad(date_notice_4), 같으면 없음)
+  init();
+  const girl = Number(g.Girlid), lv = famLevel(g, Number(g.Familiarity) || 0);
+  const car = (snap.Cars?.CarInfo ?? []).find((c: any) => Number(c.Carid) === Number(snap.UserInfo?.Currentcar));
+  const grade = Number(car?.Grade) || 1, rarity = Number(g.Rarity) || Number(girls!.get(girl)?.Rarity) || 1;
+  const react = grade > rarity ? 'Car_Reaction_Good' : grade < rarity ? 'Car_Reaction_Bad' : null;
+  const rs = react ? scriptRows(girl, react, lv) : [];
+  const script = rs.length ? { Chunk: [chunk(girl, react!, lv, rs.flatMap((r, i) => {
+    const o = toIns(r);
+    return i === 0 ? [o, { Function: 'DATE_NOTICE', TextTag: react === 'Car_Reaction_Good' ? 'date_notice_3' : 'date_notice_4', Parameter: ['1.5', react === 'Car_Reaction_Good' ? '2' : '3'] }] : [o];
+  }))] } : null;
+  // 차량 반응 기억도 이때 생긴다 (실기록: 제안 직후 GirlMemorySet 에 2033 Car_Reaction_Good, FmFlag 단계 비트, RewardState 2)
+  const def = script && memories!.find((m: any) => Number(m.GirlId) === girl && m.Scriptname === react);
+  if (def) {
+    snap.GirlMemorySet ??= { GirlMemory: [], Version: 1 };
+    let gm = snap.GirlMemorySet.GirlMemory.find((x: any) => Number(x.Girlid) === girl);
+    if (!gm) { gm = { Girlid: girl, Memory: [] }; snap.GirlMemorySet.GirlMemory.push(gm); }
+    let m = gm.Memory.find((x: any) => Number(x.Id) === Number(def.Id));
+    if (!m) { m = { Id: Number(def.Id), FmFlag: 0, RewardState: 2, MemoryName: react }; gm.Memory.push(m); }
+    m.FmFlag = (Number(m.FmFlag) || 0) | (1 << (lv - 1));
+    ctx.store.putUser(ctx.session.accountId, snap);
+  }
+  return [{ name: 'MsgDateProposeAns', body: { Seq: 1, Result: 1, GirlInfo: g, UserInfo: snap.UserInfo, ...(script ? { Script: script } : {}) } }];
 });
 
 register('MsgDateStartReq', (body, ctx): Msg[] => {
@@ -160,30 +211,56 @@ register('MsgDateStartReq', (body, ctx): Msg[] => {
   const place = places!.get(Number(body?.DatePlace));
   if (!place) return fail(`장소 데이트가 아님 (DateType ${body?.DateType ?? '-'}: 백화점 등은 실서버 기록이 더 필요해 미구현)`);
   const ui = snap.UserInfo;
+  const girl = Number(g.Girlid), lv = famLevel(g, Number(g.Familiarity) || 0);
+  if (lv < (Number(place.UnlockFmLevel) || 1)) return fail(`호감도 단계 부족 (${lv} < ${place.UnlockFmLevel})`); // 추정: 거절 코드 미확인
   const price = Number(place.Price) || 0;
   if ((Number(ui.Coin) || 0) < price) return fail('코인 부족', 3);
+  // 티켓 장소: 티켓 1장 소모. 실기록(경기장 60010): 시작 응답 ItemInfo [{Itemid, Itemtype, Count 남은 수, StackNum 남은 수}]
+  const ticket = Number(place.Ticketid) || 0;
+  const ticketItems: any[] = [];
+  if (ticket) {
+    const it = (snap.Items?.ItemInfo ?? []).find((x: any) => Number(x.Itemtype) === ticket && Number(x.Count) > 0);
+    if (!it) return fail(`티켓 ${ticket} 없음`); // 추정: 거절 코드 미확인
+    it.Count = Number(it.Count) - 1;
+    ticketItems.push({ Itemid: it.Itemid, Itemtype: ticket, Count: it.Count, StackNum: it.Count });
+    if (it.Count <= 0) snap.Items.ItemInfo = snap.Items.ItemInfo.filter((x: any) => x !== it);
+  }
   ui.Coin -= price;
-  const girl = Number(g.Girlid), lv = famLevel(g, Number(g.Familiarity) || 0);
+  const mood = placeMood(girl, Number(place.Id));
   const tutorial = !(Number(ui.Completion) & TUT_DATE);
   const chunks: any[] = [];
   let st: DateState;
-  if (tutorial) {
-    const chat = chatChunk(girl, lv, Number(g.Familiarity) || 0, true, 1);
-    chunks.push(chunk(girl, place.ScriptName, lv, placeIns(girl, place, lv)));
-    if (chat) chunks.push(chat.chunk);
+  const intro = placeIns(girl, place, lv);
+  if (mood && !tutorial) intro.splice(intro.findIndex((o) => o.Function === 'CHANGE') + 1, 0, mood.notice);
+  const moodChunk = mood && !tutorial && scriptRows(girl, mood.event, lv).length
+    ? chunk(girl, mood.event, lv, scriptRows(girl, mood.event, lv).map((r) => {
+      const o = toIns(r);
+      if (o.Function === 'CHANGE' && o.Parameter) { if (o.Parameter[0] === 'ND') o.Parameter[0] = String(place.Id); o.Parameter = [...o.Parameter.slice(0, 3), 'face_basic', 'NONE']; }
+      return o;
+    })) : null;
+  const events = moodChunk ? [mood!.event] : [];
+  if (tutorial || !hasQuestions(girl, place.ScriptName, lv)) {
+    // 문항 없음: 시작, 사건(문항·선물이 있으면 Index 1), 종료, 결과·마침 인덱스
+    const ev = eventChunk(girl, lv, Number(g.Familiarity) || 0, tutorial, 1);
+    chunks.push(chunk(girl, place.ScriptName, lv, intro));
+    if (moodChunk) chunks.push(moodChunk);
+    if (ev) { chunks.push(ev.chunk); events.push(ev.name); }
     chunks.push(chunk(girl, 'Date_End_Basic', lv, scriptRows(girl, 'Date_End_Basic', lv).map((r) => toIns(r))));
-    chunks.push(chunk(girl, place.ScriptName, lv, [{ Index: 2 }, { Index: 3 }]));
-    st = { girl, place: place.Id, lv, tutorial, likes: 0, dislikes: 0, chat: chat?.name ?? null, chatSat: 0, resultIndex: 2, finalIndex: 3, end: 'Date_End_Basic' };
+    const r = ev?.ask ? 2 : 1;
+    chunks.push(chunk(girl, place.ScriptName, lv, [{ Index: r }, { Index: r + 1 }]));
+    st = { girl, place: place.Id, lv, tutorial, likes: 0, dislikes: 0, chat: ev?.ask && !ev.gift ? ev.name : null, chatSat: 0,
+      resultIndex: r, finalIndex: r + 1, end: 'Date_End_Basic', events, gift: !!ev?.gift };
   } else {
-    chunks.push(chunk(girl, place.ScriptName, lv, [...placeIns(girl, place, lv),
-      ...questionIns(girl, place.ScriptName, lv, 1, 1), ...questionIns(girl, place.ScriptName, lv, 2, 2)]));
+    const qs = [...questionIns(girl, place.ScriptName, lv, 1, 1), ...questionIns(girl, place.ScriptName, lv, 2, 2)];
+    if (moodChunk) { chunks.push(chunk(girl, place.ScriptName, lv, intro), moodChunk, chunk(girl, place.ScriptName, lv, qs)); }
+    else chunks.push(chunk(girl, place.ScriptName, lv, [...intro, ...qs]));
     chunks.push(chunk(girl, place.ScriptName, lv, [{ Index: 3 }, { Index: 4 }]));
-    st = { girl, place: place.Id, lv, tutorial, likes: 0, dislikes: 0, chat: null, chatSat: 0, resultIndex: 3, finalIndex: 4 };
+    st = { girl, place: place.Id, lv, tutorial, likes: 0, dislikes: 0, chat: null, chatSat: 0, resultIndex: 3, finalIndex: 4, events };
   }
   setState(ctx, st);
   ctx.store.putUser(ctx.session.accountId, snap);
   return [
-    { name: 'MsgDateStartAns', body: { Seq: 1, Result: 1, UserInfo: ui, GirlInfo: { Girlid: girl }, DatePlace: place.Id, ItemInfo: [] } },
+    { name: 'MsgDateStartAns', body: { Seq: 1, Result: 1, UserInfo: ui, GirlInfo: { Girlid: girl }, DatePlace: place.Id, ItemInfo: ticketItems } },
     { name: 'MsgLoadScript', body: { Seq: 2, Script: { Chunk: chunks } } },
   ];
 });
@@ -205,7 +282,16 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
   if (st.dept) return departmentProgress(snap, g, st, body, head, ctx, save);
 
   // 채팅 이벤트 답 (튜토리얼은 Depth 0 Index 1, 일반은 Depth 1 Index 5)
-  const isChat = st.tutorial ? index === 1 : depth === 1 && index === 5;
+  const isChat = (st.tutorial || st.resultIndex === 2) && !st.gift ? depth === 0 && index === 1 : depth === 1 && index === 5;
+  // 선물 사건 (실기록 20102 단계 1: GiftFromGirl {ItemInfo [{61001, 100, DeltaNum 100}], CarInfo [], GirlItemInfo []} + UserInfo.
+  //   추정: 코인 100 x 친밀도 단계)
+  if (st.gift && ((depth === 1 && index === 5) || (depth === 0 && index === 1 && st.resultIndex === 2))) {
+    const coin = 100 * st.lv;
+    ui.Coin = (Number(ui.Coin) || 0) + coin;
+    st.gift = false;
+    save();
+    return [{ name: 'MsgScriptProgressAns', body: { ...head, GiftFromGirl: { ItemInfo: [{ Itemtype: 61001, Count: coin, DeltaNum: coin }], CarInfo: [], GirlItemInfo: [] }, UserInfo: ui } }];
+  }
   if (isChat && st.chat) {
     const ansRows = scriptRows(st.girl, st.chat, st.lv).filter((r) => r.Function === 'ANSWER');
     const a = ansRows[(Number(body?.AnswerSelect) || 1) - 1] ?? ansRows[ansRows.length - 1];
@@ -219,7 +305,7 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
   }
 
   // 일반 데이트 문항 1·2
-  if (!st.tutorial && depth === 0 && (index === 1 || index === 2)) {
+  if (!st.tutorial && st.resultIndex === 3 && depth === 0 && (index === 1 || index === 2)) {
     const ans = Number(body?.AnswerSelect) || 1;
     const liked = answers[`${st.girl}|${place.ScriptName}|${st.lv}|${index}`] ?? 1;
     const good = ans === liked;
@@ -230,9 +316,10 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
     ]);
     const chunks = [resChunk];
     if (index === 2) {
-      const chat = chatChunk(st.girl, st.lv, Number(g.Familiarity) || 0, false, 5);
-      if (chat) { chunks.push(chat.chunk); st.chat = chat.name; }
-      st.end = st.likes > st.dislikes ? 'Date_End_Good' : st.likes < st.dislikes ? 'Date_End_Bad' : 'Date_End_Basic';
+      const ev = eventChunk(st.girl, st.lv, Number(g.Familiarity) || 0, false, 5);
+      if (ev) { chunks.push(ev.chunk); (st.events ??= []).push(ev.name); if (ev.gift) st.gift = true; else if (ev.ask) st.chat = ev.name; }
+      // 종료 대본 (실기록 3건: 좋아함 0 -> Basic, 좋아함 1 -> Basic 1건·Good 1건. 추정: 2개 Good, 1개 Good/Basic 반반, 0개 Basic. Bad 는 미관측)
+      st.end = st.likes >= 2 ? 'Date_End_Good' : st.likes === 1 ? (Math.random() < 0.5 ? 'Date_End_Good' : 'Date_End_Basic') : 'Date_End_Basic';
       if (!scriptRows(st.girl, st.end, st.lv).length) st.end = 'Date_End_Basic';
       chunks.push(chunk(st.girl, st.end, st.lv, scriptRows(st.girl, st.end, st.lv).map((r) => toIns(r))));
     }
@@ -242,7 +329,9 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
 
   // 결과
   if (depth === 0 && index === st.resultIndex) {
-    const sat = Math.max(1, Math.min(5, 3 + st.likes - st.dislikes + st.chatSat));
+    // 만족도 = 3 + 좋아한 답 수 (실기록 4건: 좋아함 1·싫어함 1 -> 4, 좋아함 1·싫어함 1·선물 -> 4, 싫어함 2 -> 3, 문항 없음 -> 3.
+    //   싫어한 답과 채팅 답은 만족도를 바꾸지 않는다. 1·2 는 삐침·차량 등에서 나오는 것으로 추정)
+    const sat = Math.max(1, Math.min(5, 3 + st.likes));
     st.satisfaction = sat;
     const delta = Math.round((Number(place.Familiarity) || 0) * MULT[sat]);
     const firstAtPlace = !(g.DatingState ?? []).some((x: any) => Number(x.Placeid) === st.place);
@@ -263,10 +352,21 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
     delete ui.LevelUp;
     levelUp(snap);
     const uiOut = { ...ui };
+    // 친밀도 단계 장면: 단계 3 / 최대(4)에 오른 뒤 첫 데이트 결과에 FamiliarityLv3 / FamiliarityLvMax 덩어리
+    //   (실기록: 20105 백화점 데이트로 단계 3 도달 -> 다음 경기장 데이트 결과에 FamiliarityLv3, 그다음 영화관 결과에는 없음).
+    //   본 적 있는지는 기억(girlMemoryTable FamiliarityLv3) 기록으로 판단. 선물·문항 행이 있는 장면은 건너뜀(추정).
+    const scene = st.lv >= 4 ? 'FamiliarityLvMax' : st.lv >= 3 ? 'FamiliarityLv3' : null;
+    const seen = (snap.GirlMemorySet?.GirlMemory ?? []).find((x: any) => Number(x.Girlid) === st.girl)?.Memory ?? [];
+    const sceneDef = scene && memories!.find((m: any) => Number(m.GirlId) === st.girl && m.Scriptname === scene);
+    const sceneRows = scene ? scriptRows(st.girl, scene, st.lv) : [];
+    const showScene = !!scene && sceneRows.length > 0 && !sceneRows.some((r) => r.Function === 'GIFT' || r.Function === 'QUESTION')
+      && !(sceneDef && seen.some((x: any) => Number(x.Id) === Number(sceneDef.Id)));
+    if (showScene) (st.events ??= []).push(scene!);
     save();
     return [{ name: 'MsgScriptProgressAns', body: { ...head, UserInfo: uiOut, DeltaInfo: { Charexp: xp },
       GirlInfo: { ...g, DeltaFamiliarity: delta, BonusFamiliarity: bonus },
-      DateReward: { DateResult: sat, Satisfaction: sat, RewardInfo: { Charexp: xp } } } }];
+      DateReward: { DateResult: sat, Satisfaction: sat, RewardInfo: { Charexp: xp } },
+      ...(showScene ? { Script: { Chunk: [chunk(st.girl, scene!, st.lv, sceneRows.map((r) => toIns(r)))] } } : {}) } }];
   }
 
   // 종료
@@ -276,14 +376,21 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
     snap.GirlMemorySet ??= { GirlMemory: [], Version: 1 };
     let gm = snap.GirlMemorySet.GirlMemory.find((x: any) => Number(x.Girlid) === st.girl);
     if (!gm) { gm = { Girlid: st.girl, Memory: [] }; snap.GirlMemorySet.GirlMemory.push(gm); }
-    const names = [...(st.tutorial ? [] : ['Date_Start']), place.ScriptName, st.end ?? 'Date_End_Basic'];
+    // 기억: 시작·장소·종료 + 이번 데이트의 사건(채팅·힌트·선호·단계 장면). 실기록: 이름은 girlMemoryTable Scriptname 또는 Girlscript
+    //   (20105 Chat_B 는 Scriptname '20105_Event_Chat_B', MemoryName 'Date_Event_Chat_B'). Chat_B 의 FmFlag 는 기록상 64(의미 미확인 -> 단계 비트로 둠)
+    const names = [...(st.tutorial ? [] : ['Date_Start']), place.ScriptName, st.end ?? 'Date_End_Basic', ...(st.events ?? [])];
     for (const n of names) {
-      const def = memories!.find((m: any) => Number(m.GirlId) === st.girl && m.Scriptname === n);
+      const def = memories!.find((m: any) => Number(m.GirlId) === st.girl && (m.Scriptname === n || m.Girlscript === n));
       if (!def) continue;
       let m = gm.Memory.find((x: any) => Number(x.Id) === Number(def.Id));
-      if (!m) { m = { Id: Number(def.Id), FmFlag: 0, RewardState: 2, MemoryName: n }; gm.Memory.push(m); }
+      if (!m) { m = { Id: Number(def.Id), FmFlag: 0, RewardState: 2, MemoryName: def.Girlscript ?? n }; gm.Memory.push(m); }
       m.FmFlag = (Number(m.FmFlag) || 0) | (1 << (st.lv - 1));
     }
+    // 기분: 만족도 4 이상이면 3(즐거움), 아니면 즐거움이 풀려 0 (실기록 20101·20102 만족도 4 -> 3, 20105 만족도 3 -> 0).
+    //   삐침(2)은 미구현: 기록 1건(20105, 싫어하는 답 2개 데이트 뒤 2)뿐이고 PeevishCondition/Value 규칙이 서버 전용.
+    //   CauseOfPeevish·SolutionForPeevish(0) 는 기분이 0 이 아니게 될 때 레코드에 생긴다 (실기록: 기분 3·2 결과에만 있음)
+    if (Number(g.Emotion) !== 1 && Number(g.Emotion) !== 2) g.Emotion = sat >= 4 ? 3 : 0;
+    if (Number(g.Emotion) !== 0) { g.CauseOfPeevish ??= 0; g.SolutionForPeevish ??= 0; }
     // 첫 데이트 후 관계도 다음 노드 개방
     const patch: any[] = [];
     if ((st as any).firstDate) {

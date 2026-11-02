@@ -90,3 +90,24 @@ register('MsgCollectFamiliarityReq', (body, ctx): Msg[] => {
   ctx.store.putUser(ctx.session.accountId, snap);
   return [{ name: 'MsgCollectFamiliarityAns', body: { Seq: 1, Result: 1, GirlInfo: g, UserInfo: snap.UserInfo } }];
 });
+
+// 캐릭터 의상 장착·해제. 실기록(2026-11-02, 20105 드레스): 요청 {GirlInfo:{Girlid, <슬롯 필드>: GirlItems ItemId | -1(해제), SpecialDressVisibleCheck?}}
+//   -> {Seq, Result 1, UpdateGirlInfo [캐릭터 레코드 전체], GgraphPatch {Gnode []}, GirlItemInfo []}. 해제 후에도 필드는 -1 로 남는다.
+//   슬롯 필드는 클라이언트가 아이템 종류로 정한다(SpecialDressSlot 등). 이름에 'Slot' 이 든 필드와 SpecialDressVisibleCheck 만 받는다.
+register('MsgUpdateMyGirlInfoReq', (body, ctx): Msg[] => {
+  const snap = ctx.store.getUser(ctx.session.accountId);
+  const req = body?.GirlInfo ?? {};
+  const g = (snap?.MyGirls?.MyGirlInfo ?? []).find((x: any) => Number(x.Girlid) === Number(req.Girlid) && Number(x.State) === GIRL_OPEN);
+  if (!snap || !g) return [{ name: 'MsgUpdateMyGirlInfoAns', body: { Result: 2 } }];
+  const owned = new Set((snap.GirlItems?.GirlItemInfo ?? []).map((x: any) => Number(x.ItemId)));
+  for (const [k, v] of Object.entries(req)) {
+    if (k === 'Girlid' || k === 'GirlItemSlotNum') continue;
+    if (k === 'SpecialDressVisibleCheck') { g[k] = !!v; continue; }
+    if (!/Slot/.test(k)) continue;
+    const id = Number(v);
+    if (id !== -1 && !owned.has(id)) return [{ name: 'MsgUpdateMyGirlInfoAns', body: { Result: 2 } }];
+    g[k] = id;
+  }
+  ctx.store.putUser(ctx.session.accountId, snap);
+  return [{ name: 'MsgUpdateMyGirlInfoAns', body: { Seq: 1, Result: 1, UpdateGirlInfo: [g], GgraphPatch: { Gnode: [] }, GirlItemInfo: [] } }];
+});

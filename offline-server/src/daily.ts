@@ -1,7 +1,7 @@
 // 일일 초기화. 실기록(2026-11-01 07:00:13 UTC 요청 중, 2026-11-02 08:56 UTC 로그인):
 //   기준 시각 = 미국 태평양(America/Los_Angeles) 자정 (Tvalue 1793516400 = 11-01 00:00 PDT, 1793606400 = 11-02 00:00 PST).
 //   PropertySet DQUEST.Tvalue 가 지나면 첫 요청에서:
-//     - DQUEST_RACE / DQUEST_DATE / DQUEST_PARTSUP Nvalue 0, DQUEST.Tvalue = 다음 기준 시각 (DQUEST.Nvalue 는 1 그대로)
+//     - DQUEST_RACE / DQUEST_DATE / DQUEST_PARTSUP Nvalue 0, DQUEST.Tvalue = 다음 기준 시각, DQUEST.Nvalue 1
 //     - dailyRaceDay = 태평양 날짜의 일수(1970-01-01 기준), EventRaceNextRefreshTime = 다음 기준 시각
 //     - 출석: Daygift {ReturnUser 2, DayTerm 1, DayCount n+1, CarInfo [], ItemInfo [{Itemid 0, Itemtype, Count, StackNum, DeltaNum}],
 //       GirlItemInfo [], Version 1}, 보상은 dailyBonusTable(Term 1, Day=DayCount) NewReward x NewAmount 를 우편으로
@@ -51,7 +51,7 @@ export function dailyReset(snap: any, nowMs = Date.now()): DailyResult | null {
   const now = nowMs / 1000;
   if (Number(dq.Tvalue) && now < Number(dq.Tvalue)) return null;
   const next = nextResetSec(nowMs);
-  dq.Nvalue = Number(dq.Nvalue) || 1;
+  dq.Nvalue = 1; // 일일 미션 진행 중 (2 = 모두 달성, 3 = 보상 수령 추정)
   dq.Tvalue = next;
   for (const n of ['DQUEST_RACE', 'DQUEST_DATE', 'DQUEST_PARTSUP']) prop(snap, n).Nvalue = 0;
   snap.dailyRaceDay = laDayNumber(nowMs);

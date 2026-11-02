@@ -78,6 +78,14 @@ export function bumpProperty(snap: any, name: string, by: number): boolean {
   if (!p) { p = { PropertyName: name, Nvalue: 0 }; snap.PropertySet.Property.push(p); }
   const prev = Number(p.Nvalue) || 0;
   p.Nvalue = Math.min(max, prev + by);
+  // 일일 미션 3개(레이스·데이트·강화)가 모두 상한이면 DQUEST 1 -> 2 (실기록 2026-11-02: 세 번째 데이트 결과에서 2)
+  if (name.startsWith('DQUEST_') && p.Nvalue !== prev) {
+    const dq = snap.PropertySet.Property.find((x: any) => x.PropertyName === 'DQUEST');
+    const vmax = (n: string) => Number((table('vconstTable.json')?.Vconst ?? []).find((c: any) => c?.Name === `${n}_MAX`)?.Dval) || 1;
+    const done = ['DQUEST_RACE', 'DQUEST_DATE', 'DQUEST_PARTSUP'].every((n) =>
+      Number(snap.PropertySet.Property.find((x: any) => x.PropertyName === n)?.Nvalue) >= vmax(n));
+    if (dq && done && Number(dq.Nvalue) === 1) dq.Nvalue = 2;
+  }
   return p.Nvalue !== prev;
 }
 

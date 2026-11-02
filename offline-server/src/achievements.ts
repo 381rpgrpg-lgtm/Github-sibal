@@ -12,7 +12,7 @@
 //   102 구역 보스 처치(보스 레이스 승리 비트)  103 보스 처치 시 그 구역 모든 레이스 ClearRec.Grade 1(S) (추정: 기록은 모두 S)
 //   201 차량 획득 대수 +n (새 Carid)  202 그 등급 차량 획득(추정)  203 그 차종 획득(추정)
 //   204 차량 강화 +1   205 강화 UpgradeSuccess +1   208 부품 강화(조합) +1
-//   302 데이트 결과(DateResult) 가 Value2 인 데이트 +1   303 연락처 수(데이트 1회 이상 + 캐릭터 레이스 획득)   304 CG 수(추정: 기록상 히로인 수와 같이 증가)
+//   302 데이트 결과(DateResult) 가 Value2 인 데이트 +1   303 연락처 수(열린 캐릭터 - 첫 캐릭터)   304 CG 수(추정: 기록상 히로인 수와 같이 증가)
 //   309 히로인 의상(GirlItems) 수   401 플레이어 레벨   402 획득 코인 누계 (응답 전후 코인 증가분; 소비와 같은 요청이면 순증가만)
 // 미구현(진행 없음): 104 Crazy 승리, 109 주간 레이스 아이템, 110 월드 투어, 113, 206 차량 조합, 207, 209, 301, 305, 306, 308, 403~407.
 import { table, carDefOf } from './gamecalc.js';
@@ -22,12 +22,6 @@ let defs: Ach[] | null = null;
 export function achDefs(): Ach[] {
   if (!defs) defs = (table('achievementTable.json')?.Achievements ?? []) as Ach[];
   return defs;
-}
-let rg: Set<number> | null = null;
-function girlRaceIds(): Set<number> {
-  if (!rg) rg = new Set((table('battleTable.json')?.BattleArea ?? []).flatMap((a: any) => (a.Race ?? [])
-    .filter((r: any) => Number(r.RaceType) === 7 && r.GirlId).map((r: any) => Number(r.GirlId))));
-  return rg;
 }
 const TARGETED = new Set([102, 103, 113, 202, 203, 308]);
 
@@ -100,10 +94,10 @@ export function achAfter(snap: any, before: AchBefore, name: string, req: any, m
     const main = races.filter((r) => Number(r.RaceIndex) <= 20); // 본편 11~20 (캐릭터 레이스 21+ 제외, 추정)
     if (main.every((r) => Number(r.ClearRec?.Grade) === 1)) apply(snap, 103, () => 1, changed, zid);
   }
-  // 303 연락처: 데이트를 1회 이상 한 캐릭터 + 캐릭터 레이스로 얻은 캐릭터 (기록: 관계도로 열리기만 한 20102 는 세지 않음)
-  const raceGirls = girlRaceIds();
-  const girls = (snap.MyGirls?.MyGirlInfo ?? []).filter((g: any) => Number(g.State) === 7
-    && (Number(g.NthDate) > 0 || raceGirls.has(Number(g.Girlid)))).length;
+  // 303 연락처 = 열린(State 7) 캐릭터 수 - 첫 캐릭터 (실기록 6건: 관계도로 열린 20101·20102, 레이스로 얻은 20207·20405 에서 +1,
+  //   첫 캐릭터 20105 와 이미 열린 캐릭터의 첫 데이트에서는 그대로). 304(CG) 는 기록상 같은 값으로 움직였다(추정).
+  const first = Number(ui.FirstGirl) || 0;
+  const girls = (snap.MyGirls?.MyGirlInfo ?? []).filter((g: any) => Number(g.State) === 7 && Number(g.Girlid) !== first).length;
   if (girls) { apply(snap, 303, () => girls, changed); apply(snap, 304, () => girls, changed); }
   const dresses = (snap.GirlItems?.GirlItemInfo ?? []).length;
   if (dresses) apply(snap, 309, () => dresses, changed);

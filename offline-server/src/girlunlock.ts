@@ -58,7 +58,9 @@ export function evalGirlUnlocks(snap: any, datedGirl?: number): { nodes: any[]; 
     }
     const all = list.every((c) => flag & (1 << (Number(c.Rid) - 1)));
     const state = all ? 6 : flag ? 5 : Number(node.State) || 4;
-    if (state === Number(node.State) && flag === Number(node.GirlInfo?.UnlockCritFlag || 0)) continue;
+    // 로그인 데이터의 미개방 노드 GirlInfo 는 {Girlid} 뿐이다: 저장된 플래그가 없으면 상태가 같을 때 바뀐 것으로 보지 않는다
+    const stored = node.GirlInfo?.UnlockCritFlag;
+    if (state === Number(node.State) && (stored === undefined || flag === Number(stored))) continue;
     if (state === 4) continue;
     const base = newGirlRecord(gid);
     node.State = state;
