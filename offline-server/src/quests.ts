@@ -46,7 +46,9 @@ function stateValue(snap: any, o: any): number | null {
     case 16: return cars.filter((c) => carGrade(c) >= Number(p[2] || 1) && Number(c.UpgradeLevel) >= Number(p[3] || 1)).length;
     case 18: return cars.filter((c) => carGrade(c) >= Number(p[1] || 1)).length;
     case 26: { const cur = cars.find((c) => Number(c.Carid) === Number(snap.UserInfo?.Currentcar)); return cur && carGrade(cur) >= Number(p[2] || 1) ? 1 : 0; }
-    case 27: return (snap.Items?.ItemInfo ?? []).filter((it: any) => Number(it.Equipcarid) > 0 && Number(partDef(it.Itemtype)?.Grade) >= Number(p[2] || 1)).length;
+    // 27 [수, 부품 Id, 등급]: 부품 Id 가 있으면 그 부품 장착 (실기록 2026-11-03 10604: 33211·36211 장착 시 각각 1), 없으면 그 등급 이상 장착 수
+    case 27: return (snap.Items?.ItemInfo ?? []).filter((it: any) => Number(it.Equipcarid) > 0
+      && (p[1] ? Number(it.Itemtype) === Number(p[1]) : Number(partDef(it.Itemtype)?.Grade) >= Number(p[2] || 1))).length;
     default: return null;
   }
 }

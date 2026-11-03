@@ -119,10 +119,14 @@ register('MsgSetCurrentCarReq', (body, ctx): Msg[] => {
 //   UserInfo, ItemInfo [{Itemid, Itemtype 61006(차량 부품), Count, StackNum}]}. 비용 n = 차량 부품 개수(캐시가 아님: 캐시 그대로, 61006 53 -> 25).
 //   늘어나는 양 = cars.json Expansion (10602 = 63). 비용 n 은 클라이언트가 계산해 보낸 값을 쓴다(서버 쪽 비용표 미확인).
 //   추정: 한 번만 가능(ExpansionLevel 1 이면 거절), 부품이 모자라면 Result 2.
+//   실기록 2026-11-03 (TOFU++ 10604 ★4, 178/178): 요청 ExpansionCash 28 인데 부품 206 -> 170 (36 소모), MasteryCapacity 178 -> 306 (Expansion 128).
+//   즉 실제 비용은 서버가 정한다. 기록된 등급별 비용(★2 28, ★4 36)을 쓰고, 기록 없는 등급은 클라이언트 값.
+const EXPAND_PARTS: Record<number, number> = { 2: 28, 4: 36 };
 register('MsgMasteryExpandReq', (body, ctx): Msg[] => {
   const snap = ctx.store.getUser(ctx.session.accountId);
   const car = (snap?.Cars?.CarInfo ?? []).find((c: any) => Number(c.Carid) === Number(body?.CarInfo?.Carid));
-  const cost = Number(body?.ExpansionCash) || 0;
+  const grade = Number(car?.Grade) || Number(carDef(car?.Cartype)?.Grade) || 0;
+  const cost = EXPAND_PARTS[grade] ?? (Number(body?.ExpansionCash) || 0);
   const parts = (snap?.Items?.ItemInfo ?? []).find((x: any) => Number(x.Itemtype) === 61006);
   const add = Number(carDef(car?.Cartype)?.Expansion) || 0;
   if (!snap || !car || !add || Number(car.ExpansionLevel) >= 1 || cost <= 0 || (Number(parts?.Count) || 0) < cost) {
