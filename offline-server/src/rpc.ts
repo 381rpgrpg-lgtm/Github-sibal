@@ -24,7 +24,6 @@ export interface Msg {
 export type Handler = (body: any, ctx: Ctx) => Msg[] | Promise<Msg[]>;
 
 const handlers = new Map<string, Handler>();
-const LEVELUP_MSGS = new Set(['MsgBattleStartAns', 'MsgBattleResultAns', 'MsgRaceRewardAns', 'MsgScriptProgressAns', 'MsgDateResultAns', 'MsgUserData', 'MsgLoginAns']);
 const RECORD_ALWAYS = new Set((process.env.DG_RECORD_ALWAYS ?? '').split(',').map((x) => x.trim()).filter(Boolean));
 
 export function register(name: string, fn: Handler): void {
@@ -84,14 +83,9 @@ export async function dispatch(name: string, body: any, ctx: Ctx): Promise<{ mes
       { name: 'MsgNotifyEvent', body: { Seq: seq + 3, DailyRewardRaces: daily.DailyRewardRaces } },
     );
   }
-  // UserInfo.LevelUp 은 레이스·데이트 응답에만 실린다 (실기록: 레벨업 뒤 RaceReward·BattleStart·DateResult 에는 있고
-  //   UpdateNquest·UpdateCompletion·CollectFamiliarity 에는 없음). 저장값은 다음 레이스 결과까지 유지.
-  for (const m of messages) {
-    if (!LEVELUP_MSGS.has(m.name) && m.body?.UserInfo?.LevelUp) {
-      const { LevelUp: _drop, ...rest } = m.body.UserInfo;
-      m.body = { ...m.body, UserInfo: rest };
-    }
-  }
+  // UserInfo.LevelUp: 레벨업 뒤 다음 경험치 지급(레이스 결과·퀘스트 보상·데이트 결과)까지 모든 응답의 UserInfo 에 남는다.
+  //   실기록 2026-11-02 (봇 녹화, 레벨 6·7·8 세 번): 로그인·CollectFamiliarity·GetMailItem·BuyProduct·RaceReward·BattleStart 에 유지,
+  //   다음 BattleResult 에서 사라짐. 2026-11-01 기록의 '퀘스트 보상 응답에 없음'은 경험치 보상으로 지워진 경우였다. (따로 걸러내지 않음)
   console.log(`[rpc] ${name} -> ${messages.map((m) => m.name).join(',') || '(none)'}`);
   return { messages };
 }

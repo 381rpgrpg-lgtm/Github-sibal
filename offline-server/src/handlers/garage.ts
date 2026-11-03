@@ -60,7 +60,7 @@ register('MsgUpgradeCarReq', (body, ctx): Msg[] => {
     questEvent(snap, 17, () => true); // 퀘스트: 차량 n회 강화
     ctx.store.putUser(ctx.session.accountId, snap);
     return [{ name: 'MsgUpgradeCarAns', body: {
-      Seq: 1, Result: R_OK, UpgradeSuccess: true, ResultCarInfo: { ...car, CarEffect: car.CarEffect ?? [] }, UserInfo: ui,
+      Seq: 1, Result: R_OK, UpgradeSuccess: true, ResultCarInfo: { ...car } /* CarEffect 는 원래 있는 차만 (실기록: 코인 상자 차량은 키 없음) */, UserInfo: ui,
       RemovedCarInfo: [...ids].map((Carid) => ({ Carid })), RemovedPartsInfo: removedParts.map((p: any) => ({ Itemid: p.Itemid })),
       NormalDeltaExp: pv.exp, BonusDeltaExp: 0,
       // PropertySet 은 일일 미션 값이 바뀐 때만 (실기록 2026-11-02: 그날 첫 강화에만 있음)
@@ -95,11 +95,13 @@ register('MsgUpgradeInfoReq', (body, ctx): Msg[] => {
   const pv = upgradePreview(snap, car, body?.SourceCarInfo ?? []);
   if ('error' in pv) {
     console.warn(`[garage] 강화 조회 거절: ${pv.error}`);
+    // 실기록 2026-11-02 (37건): 대상이 이미 최대 레벨이면 {Seq, Result 101} 만 온다
+    if (pv.error === '이미 최대 레벨') return [{ name: 'MsgUpgradeInfoAns', body: { Seq: 1, Result: 101 } }];
     return [{ name: 'MsgUpgradeInfoAns', body: { Seq: 1, Result: R_FAIL } }];
   }
   return [{ name: 'MsgUpgradeInfoAns', body: {
     Seq: 1, Result: 1, SuccessChance: 100, ChanceupBonus: { CarLevelBonus: pv.bonus, TotalBonus: pv.bonus },
-    Cost: { Coin: pv.cost }, ExpectedCarInfo: { ...car, ...pv.expected, CarEffect: car.CarEffect ?? [] },
+    Cost: { Coin: pv.cost }, ExpectedCarInfo: { ...car, ...pv.expected },
   } }];
 });
 

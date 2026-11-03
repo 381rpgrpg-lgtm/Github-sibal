@@ -80,9 +80,10 @@ register('MsgEquipPartsReq', (body, ctx): Msg[] => {
     if (!car) return fail('차량 없음');
     if (index < 1 || index > (Number(car.SlotNum) || 1)) return fail(`열리지 않은 슬롯 ${index}/${car.SlotNum}`);
     const prev = items.find((x) => x !== part && Number(x.Equipcarid) === carid && Number(x.Equipindex) === index);
-    if (prev) { prev.Equipcarid = 0; prev.Equipindex = 0; changed.push(prev); }
+    // 교체: 새 부품이 먼저, 빠진 부품이 뒤 (실기록 2026-11-02 2건: [(38, 3, 2), (5, 0, 0)]). 기존 부품은 무료로 빠진다.
     part.Equipcarid = carid; part.Equipindex = index;
     changed.push(part);
+    if (prev) { prev.Equipcarid = 0; prev.Equipindex = 0; changed.push(prev); }
     ui.Completion = Number(ui.Completion) | TUT_EQUIP_PARTS;
   }
   const qch = refreshQuests(snap);
@@ -100,7 +101,8 @@ register('MsgCarSlotCostReq', (body, ctx): Msg[] => {
   const cost = car ? slotCost(car, slot) : null;
   if (!car || !cost) {
     console.warn(`[parts] 슬롯 비용 미확인: 슬롯 ${slot} (기록 없음)`);
-    return [{ name: 'MsgCarSlotCostAns', body: { Seq: 1, Result: 2 } }];
+    // 실기록 2026-11-02: 열 수 없는 슬롯(★2 차량 4~6) -> {Result 2, CarInfo(변경 없음)}
+    return [{ name: 'MsgCarSlotCostAns', body: { Seq: 1, Result: 2, ...(car ? { CarInfo: car } : {}) } }];
   }
   return [{ name: 'MsgCarSlotCostAns', body: { Seq: 1, Result: 1, CarInfo: car, Cost: cost } }];
 });

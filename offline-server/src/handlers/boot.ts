@@ -60,7 +60,7 @@ function dailyGift(snap: any): void {
 register('MsgLoginReq', (_body, ctx): Msg[] => {
   const base = loadSnapshot(ctx);
   dailyGift(base);
-  if (base.UserInfo) delete base.UserInfo.LevelUp;
+  // LevelUp 은 로그인 데이터에도 그대로 남는다 (실기록 2026-11-02: 레벨업 뒤 다음 레이스 결과 전까지의 모든 로그인)
   refreshQuests(base); // 조건이 맞는 퀘스트를 제시 상태로 (실계정 로그인 데이터에도 State 2 퀘스트가 들어 있음)
   ctx.store.putUser(ctx.session.accountId, base);
   // 이벤트 공지 팝업(로그인마다 재표시)은 오프라인 기본값에서 끈다. config.showNotices=true 로 켬.

@@ -156,7 +156,11 @@ export function updateQuest(snap: any, questId: number, state: number, levelUp: 
     // 기록 순서: 61003(경험치) → 아이템 → 61001(코인)·61002(캐시) (실기록 10302, 10303)
     const rank = (t: number) => (t === 61003 ? 0 : t === 61001 || t === 61002 ? 2 : 1);
     reward.ItemInfo.sort((a: any, b: any) => rank(Number(a.Itemtype)) - rank(Number(b.Itemtype)));
+    // LevelUp: 경험치를 주는 보상이면 새로 계산 (레벨업이면 설정, 아니면 지움). 레벨업이면 RewardInfo.UserInfo 도 (실기록 10402 보상 -> 6레벨)
+    const lvBefore = Number(ui.Charlevel);
+    if (reward.Charexp > 0) delete ui.LevelUp;
     levelUp(snap);
+    if (Number(ui.Charlevel) > lvBefore) reward.UserInfo = { ...ui };
     const offered = refreshQuests(snap).filter((x) => x !== rec);
     const uiOut = { ...ui };
     return { ...base, NquestInfo: [rec, ...offered], RewardInfo: reward, UserInfo: uiOut, ItemInfo: [] };

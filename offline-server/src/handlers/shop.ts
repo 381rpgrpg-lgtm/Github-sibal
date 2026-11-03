@@ -78,7 +78,8 @@ function partsBox(si: any, box: any, body: any, snap: any, ctx: any): Msg[] {
   const parts = (snap.Items?.ItemInfo ?? []).filter((x: any) => PART_CATS.has(Number(x.Category)));
   if (parts.length + (Number(si.PartSlotNeed) || 0) > Number(ui.PartsSlotNum || 0)) {
     console.warn(`[shop] ${id} 구매 거절: 부품 칸 부족 (${parts.length}/${ui.PartsSlotNum})`);
-    return fail(R_UNAVAILABLE, id);
+    // 실기록 2026-11-02 (2건): {Seq, Result 8, StoreItemId, Buycount, UserInfo}
+    return [{ name: 'MsgBuyProductAns', body: { Seq: 1, Result: R_UNAVAILABLE, StoreItemId: id, Buycount: buycount, UserInfo: ui } }];
   }
   const bestCar = (snap.Cars?.CarInfo ?? []).reduce((m: number, c: any) => Math.max(m, Number(c.Grade) || 1), 1);
   const cap = box.capped ? Math.min(bestCar, 5) : 5;

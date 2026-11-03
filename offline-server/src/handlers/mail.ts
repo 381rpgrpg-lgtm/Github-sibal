@@ -28,7 +28,7 @@ register('MsgGetMailItemReq', (body, ctx): Msg[] => {
     if (!hit) { keep.push(m); continue; }
     if (m.Itemtype && m.Itemnum) {
       const ok = grantItem(snap, Number(m.Itemtype), Number(m.Itemnum));
-      if (ok) {
+      if (ok && ![61001, 61002, 61003].includes(Number(m.Itemtype))) { // 재화(코인·캐시·경험치) 우편은 ItemInfo 에 안 실린다 (실기록 레벨 보상 우편 18건)
         const it = (snap.Items?.ItemInfo ?? []).find((x: any) => Number(x.Itemtype) === Number(m.Itemtype));
         deltas.push(it ? { Itemid: it.Itemid, Itemtype: Number(m.Itemtype), Count: it.Count, StackNum: it.Count, DeltaNum: Number(m.Itemnum) }
           : { Itemtype: Number(m.Itemtype), Count: Number(m.Itemnum), DeltaNum: Number(m.Itemnum) });
@@ -51,7 +51,7 @@ register('MsgGetMailItemReq', (body, ctx): Msg[] => {
       UserInfo: snap.UserInfo,
       MailBox: snap.MailBox,
       SocialBox: box(snap.SocialBox),
-      ItemInfo: deltas,
+      ...(deltas.length ? { ItemInfo: deltas } : {}),
       GetMailStatus: got > 0 ? 1 : 0,
     },
   }];

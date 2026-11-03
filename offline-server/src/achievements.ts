@@ -7,7 +7,7 @@
 // 진행 알림: 바뀐 레코드만 MsgNotifyEvent {Memoryset:{Memory:[...]}} 로 응답의 첫 메시지 뒤에 붙인다 (Id 오름차순).
 //
 // 조건별 진행(기록 근거 / 추정 표시):
-//   101 레이스 승리 +1            104 Crazy(ExcellentCnt>0) 승리 +1   105 PerfectStart(승리 시) +1      108 NitroUseNum 합 (패배 포함, 기록)
+//   101 레이스 승리 +1            104 Crazy(ExcellentCnt>0) 승리 +1   105 PerfectStart +1 (패배 포함, 기록)      108 NitroUseNum 합 (패배 포함, 기록)
 //   106 LinearMaxSpeed 최대(버림) 107 CornerMaxSpeed 최대(버림)
 //   102 구역 보스 처치(보스 레이스 승리 비트)  103 보스 처치 시 그 구역 모든 레이스 ClearRec.Grade 1(S) (추정: 기록은 모두 S)
 //   201 차량 획득 대수 +n (새 Carid)  202 그 등급 차량 획득(추정)  203 그 차종 획득(추정)
@@ -66,7 +66,7 @@ export function achAfter(snap: any, before: AchBefore, name: string, req: any, m
   if (name === 'MsgBattleResultReq' && ok) {
     const win = !!req?.IsPlayerWin;
     if (win) apply(snap, 101, (p) => p + 1, changed);
-    if (win && req?.PerfectStart) apply(snap, 105, (p) => p + 1, changed);
+    if (req?.PerfectStart) apply(snap, 105, (p) => p + 1, changed); // 패배여도 센다 (실기록 2026-11-02 4-15 패배: 1402~1405 Count 25 -> 26)
     // 104 Crazy 승리: 승리 + ExcellentCnt(Crazy 판정 수) > 0 (실기록 2026-11-02 보스 3-20: ExcellentCnt 2 -> 1301 Count 1)
     if (win && Number(req?.ExcellentCnt) > 0) apply(snap, 104, (p) => p + 1, changed);
     const lin = Math.floor(Number(req?.LinearMaxSpeed) || 0), cor = Math.floor(Number(req?.CornerMaxSpeed) || 0);
