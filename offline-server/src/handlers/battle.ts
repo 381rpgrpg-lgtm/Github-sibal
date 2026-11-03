@@ -109,11 +109,13 @@ export function levelUp(snap: any) {
     ui.Charlevel = Number(ui.Charlevel) + 1;
     if (next.Gasoline) ui.Fuelvalue = Number(next.Gasoline);
     ui.Fueltime = now();
-    ui.LevelUp = { Level: ui.Charlevel, FuelMax: ui.Fuelvalue, Coin: 0, Cash: 2 };
+    // 레벨 보상 캐시: 평소 2, 10레벨에서 12 (실기록 2026-11-03 Lv10 1건. 10의 배수마다 +10 은 추정)
+    const lvCash = ui.Charlevel % 10 === 0 ? 12 : 2;
+    ui.LevelUp = { Level: ui.Charlevel, FuelMax: ui.Fuelvalue, Coin: 0, Cash: lvCash };
     snap.MailBox ??= { Version: 1, Mail: [], Count: 0 };
     snap.mailSeq = (Number(snap.mailSeq) || Math.max(0, ...snap.MailBox.Mail.map((m: any) => Number(m.MailId) || 0))) + 1;
     snap.MailBox.Mail.push({
-      MailId: snap.mailSeq, MailType: 4, BoxType: 0, Itemnum: 2, Itemtype: 61002, Subject: 'Level reward',
+      MailId: snap.mailSeq, MailType: 4, BoxType: 0, Itemnum: lvCash, Itemtype: 61002, Subject: 'Level reward',
       Content: `Player level ${ui.Charlevel} reached.`, ExpireTime: Math.floor(now()) + 7 * 86400,
     });
     snap.MailBox.Count = snap.MailBox.Mail.length;

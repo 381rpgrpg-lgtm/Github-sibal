@@ -18,7 +18,7 @@
 //   최대 레벨에서 남는 경험치(버림).
 import { readFileSync, existsSync } from 'node:fs';
 import { register, type Msg } from '../rpc.js';
-import { bumpProperty } from './battle.js';
+import { bumpProperty, addMastery } from './battle.js';
 import { questEvent } from '../quests.js';
 import { carLevelRow, carDef, upgradePreview } from './upgradecalc.js';
 
@@ -132,9 +132,34 @@ register('MsgMasteryExpandReq', (body, ctx): Msg[] => {
   parts.Count = Number(parts.Count) - cost;
   car.MasteryCapacity = (Number(car.MasteryCapacity) || 0) + add;
   car.ExpansionLevel = (Number(car.ExpansionLevel) || 0) + 1;
-  car.DeltaMastery = 0;
   questEvent(snap, 29, () => true); // 퀘스트: 숙련도 한계 돌파 n회
   ctx.store.putUser(ctx.session.accountId, snap);
   return [{ name: 'MsgMasteryExpandAns', body: { Seq: 1, Result: R_OK, CarInfo: car, UserInfo: snap.UserInfo,
+    ItemInfo: [{ Itemid: parts.Itemid, Itemtype: 61006, Count: parts.Count, StackNum: parts.Count }] } }];
+});
+
+// ── 숙련도 올리기 MsgMasteryUpReq {CarInfo:{Carid}, Mtype}
+//   실기록 2026-11-03 (4건, Mtype 3): 차량 부품(61006) 50 개로 숙련도 +30 -> {Seq, Result 1, CarInfo(Mastery+30, MasteryAttr 가장 낮은 능력치부터 1씩,
+//   DeltaMastery 는 그대로), UserInfo, ItemInfo [{Itemid, Itemtype 61006, Count, StackNum}]}.
+//   화면 표기(2대 실측): +30 = 골드캐시 28 / 부품 50, 최대 = 남은 숙련도 x 28/30 골드캐시(67, 159) / x 50/30 부품(120, 283).
+//   Mtype 1·2·4 의 의미(+30 골드캐시, 최대 골드캐시, 최대 부품)는 추정. 골드캐시(유료 재화)는 오프라인에서 지원하지 않아 거절.
+register('MsgMasteryUpReq', (body, ctx): Msg[] => {
+  const snap = ctx.store.getUser(ctx.session.accountId);
+  const car = (snap?.Cars?.CarInfo ?? []).find((c: any) => Number(c.Carid) === Number(body?.CarInfo?.Carid));
+  const mtype = Number(body?.Mtype) || 0;
+  const parts = (snap?.Items?.ItemInfo ?? []).find((x: any) => Number(x.Itemtype) === 61006);
+  const left = car ? (Number(car.MasteryCapacity) || 0) - (Number(car.Mastery) || 0) : 0;
+  const add = mtype === 3 ? Math.min(30, left) : mtype === 4 ? left : 0;
+  const cost = mtype === 3 ? 50 : mtype === 4 ? Math.round((left * 50) / 30) : 0;
+  if (!snap || !car || add <= 0 || !cost || (Number(parts?.Count) || 0) < cost) {
+    console.warn(`[garage] 숙련도 올리기 거절 ${JSON.stringify(body)}`);
+    return [{ name: 'MsgMasteryUpAns', body: { Seq: 1, Result: R_FAIL, ...(snap ? { UserInfo: snap.UserInfo } : {}) } }];
+  }
+  parts.Count = Number(parts.Count) - cost;
+  const delta = car.DeltaMastery;
+  addMastery(car, add);
+  car.DeltaMastery = delta;
+  ctx.store.putUser(ctx.session.accountId, snap);
+  return [{ name: 'MsgMasteryUpAns', body: { Seq: 1, Result: R_OK, CarInfo: car, UserInfo: snap.UserInfo,
     ItemInfo: [{ Itemid: parts.Itemid, Itemtype: 61006, Count: parts.Count, StackNum: parts.Count }] } }];
 });
