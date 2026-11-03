@@ -113,3 +113,28 @@ register('MsgSetCurrentCarReq', (body, ctx): Msg[] => {
   ctx.store.putUser(ctx.session.accountId, snap);
   return [{ name: 'MsgSetCurrentCarAns', body: { Seq: 1, Result: 1, UserInfo: snap.UserInfo } }];
 });
+
+// ── 숙련도 한계 돌파 MsgMasteryExpandReq {CarInfo:{Carid}, ExpansionCash: n}
+//   실기록 2026-11-03 (TOFU 10602 ★2 Lv10, 숙련도 72/72): -> {Seq, Result 1, CarInfo(MasteryCapacity 72 -> 135, ExpansionLevel 0 -> 1),
+//   UserInfo, ItemInfo [{Itemid, Itemtype 61006(차량 부품), Count, StackNum}]}. 비용 n = 차량 부품 개수(캐시가 아님: 캐시 그대로, 61006 53 -> 25).
+//   늘어나는 양 = cars.json Expansion (10602 = 63). 비용 n 은 클라이언트가 계산해 보낸 값을 쓴다(서버 쪽 비용표 미확인).
+//   추정: 한 번만 가능(ExpansionLevel 1 이면 거절), 부품이 모자라면 Result 2.
+register('MsgMasteryExpandReq', (body, ctx): Msg[] => {
+  const snap = ctx.store.getUser(ctx.session.accountId);
+  const car = (snap?.Cars?.CarInfo ?? []).find((c: any) => Number(c.Carid) === Number(body?.CarInfo?.Carid));
+  const cost = Number(body?.ExpansionCash) || 0;
+  const parts = (snap?.Items?.ItemInfo ?? []).find((x: any) => Number(x.Itemtype) === 61006);
+  const add = Number(carDef(car?.Cartype)?.Expansion) || 0;
+  if (!snap || !car || !add || Number(car.ExpansionLevel) >= 1 || cost <= 0 || (Number(parts?.Count) || 0) < cost) {
+    console.warn(`[garage] 한계 돌파 거절 ${JSON.stringify(body)}`);
+    return [{ name: 'MsgMasteryExpandAns', body: { Seq: 1, Result: R_FAIL, ...(snap ? { UserInfo: snap.UserInfo } : {}) } }];
+  }
+  parts.Count = Number(parts.Count) - cost;
+  car.MasteryCapacity = (Number(car.MasteryCapacity) || 0) + add;
+  car.ExpansionLevel = (Number(car.ExpansionLevel) || 0) + 1;
+  car.DeltaMastery = 0;
+  questEvent(snap, 29, () => true); // 퀘스트: 숙련도 한계 돌파 n회
+  ctx.store.putUser(ctx.session.accountId, snap);
+  return [{ name: 'MsgMasteryExpandAns', body: { Seq: 1, Result: R_OK, CarInfo: car, UserInfo: snap.UserInfo,
+    ItemInfo: [{ Itemid: parts.Itemid, Itemtype: 61006, Count: parts.Count, StackNum: parts.Count }] } }];
+});
