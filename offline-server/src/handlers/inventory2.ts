@@ -1,6 +1,7 @@
 // 부품 강화·판매·잠금, 차량 판매·분해·전시, 꾸미기 도감, 일일 미션 보상, 주간 레이스 정보.
 // 실계정 직접 요청으로 실측 (2026-11-01, probe/rec2). 근거는 각 핸들러 주석.
 import { readFileSync, existsSync } from 'node:fs';
+import { wraceSet, myRank } from './weekly.js';
 import { register, type Msg } from '../rpc.js';
 import { table, partDef, carDefOf, ATTRS } from '../gamecalc.js';
 import { grantItem } from '../inventory.js';
@@ -180,18 +181,13 @@ register('MsgGetDailyQuestRewardReq', (_b, ctx): Msg[] => {
 
 // ── 주간 레이스 정보 MsgGetWRaceInfoReq -> {WraceSet{WSeasonId, StartDate, EndDate, WRace[...]}, MyWRaceRec{MyRank[...]}, UserInfo}
 //   레이스·트랙 구성은 실측 템플릿(src/data/wrace-template.json). 오프라인이라 순위는 비운다. 시즌 기간은 이번 주.
-//   주간 레이스 주행·보상(MsgWRaceRewardReq)은 미구현.
+//   주행은 weekly.ts, 시즌 보상(MsgWRaceRewardReq)은 미구현.
 register('MsgGetWRaceInfoReq', (_b, ctx): Msg[] => {
   const snap = ctx.store.getUser(ctx.session.accountId);
-  const p = new URL('../../src/data/wrace-template.json', import.meta.url).pathname;
-  const tmpl = existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) : { WRace: [] };
-  const now = Math.floor(Date.now() / 1000);
-  const week = 7 * 86400, start = now - (now % week), season = Math.floor(now / week);
-  const races = tmpl.WRace.map((w: any) => ({ ...w, WSeasonId: season, Rank: [] }));
-  return [{ name: 'MsgGetWRaceInfoAns', body: { Seq: 1,
-    WraceSet: { WRace: races, WSeasonId: season, StartDate: start, EndDate: start + week, Version: 1 },
-    MyWRaceRec: { MyRank: races.map((w: any) => ({ WRaceId: w.WRaceId, LeftTry: 0, TryCost: { Cash: 0 } })) },
-    ...(snap ? { UserInfo: snap.UserInfo } : {}) } }];
+  const set = snap ? wraceSet(snap) : null;
+  if (!snap || !set) return [{ name: 'MsgGetWRaceInfoAns', body: { Seq: 1, Result: 0 } }];
+  // 내 이번 시즌 최고 기록만 순위에 넣는다 (weekly.ts). 오프라인이라 다른 플레이어 순위는 없다.
+  return [{ name: 'MsgGetWRaceInfoAns', body: { Seq: 1, WraceSet: set, MyWRaceRec: { MyRank: myRank(snap, set.WRace) }, UserInfo: snap.UserInfo } }];
 });
 
 // ── 꾸미기 장착 MsgCosmeticEquipReq {Carid, Type, Id} -> {Result 1, Cosmetics, CarInfo:[차량]}

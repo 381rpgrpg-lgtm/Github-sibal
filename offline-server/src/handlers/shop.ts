@@ -18,6 +18,7 @@
 //   capToBestCar: 보유 차량 최고 등급(=PartsCap, 기록 1)으로 byCap 확률표를 고른다. 기록에서는 전부 Grade 1 부품.
 // 추정(기록 없음): 확률 등급(common/rare/epic/legendary/ultra) -> 부품 Grade 1..5 대응, 같은 등급 안에서 균등 추첨.
 import { readFileSync, existsSync } from 'node:fs';
+import { readTable } from '../upserts.js';
 import { register, type Msg } from '../rpc.js';
 import { grantItem, itemDef } from '../inventory.js';
 import { newOwnedCar } from '../gamecalc.js';
@@ -33,18 +34,18 @@ let boxOdds: any = null;
 let carDefs: Map<number, any> | null = null;
 function load() {
   if (store) return;
-  const it = existsSync(TABLES + 'itemTable.json') ? JSON.parse(readFileSync(TABLES + 'itemTable.json', 'utf8')) : {};
+  const it = readTable(TABLES + 'itemTable.json', 'itemTable.json') ?? {}; // content.json 표 패치 적용
   store = { items: new Map(), groups: new Map() };
   for (const s of it.StoreItem ?? []) store.items.set(Number(s.Id), s);
   for (const g of it.StoreItemGroup ?? []) {
     const k = Number(g.ItemGroupId);
     store.groups.set(k, [...(store.groups.get(k) ?? []), g]);
   }
-  partDefs = existsSync(TABLES + 'parts.json') ? (JSON.parse(readFileSync(TABLES + 'parts.json', 'utf8')).Part ?? []) : [];
+  partDefs = readTable(TABLES + 'parts.json', 'parts.json')?.Part ?? [];
   const content = new URL('../../data/content.json', import.meta.url).pathname;
   boxOdds = existsSync(content) ? JSON.parse(readFileSync(content, 'utf8')).boxOdds ?? null : null;
   carDefs = new Map();
-  if (existsSync(TABLES + 'cars.json')) for (const c of JSON.parse(readFileSync(TABLES + 'cars.json', 'utf8')).Car ?? []) carDefs.set(Number(c.Id), c);
+  for (const c of readTable(TABLES + 'cars.json', 'cars.json')?.Car ?? []) carDefs.set(Number(c.Id), c);
 }
 
 function rewardsOf(si: any): { type: number; amount: number }[] {

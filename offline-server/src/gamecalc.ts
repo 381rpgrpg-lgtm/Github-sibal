@@ -1,10 +1,11 @@
 // 여러 핸들러가 쓰는 게임 계산. 근거는 각 함수 주석(클라이언트 코드 또는 실서버 기록).
 import { readFileSync, existsSync } from 'node:fs';
+import { readTable } from './upserts.js';
 
 const TABLES = new URL('../data/tables/', import.meta.url).pathname;
 const cache: Record<string, any> = {};
 export function table(name: string): any {
-  if (!(name in cache)) cache[name] = existsSync(TABLES + name) ? JSON.parse(readFileSync(TABLES + name, 'utf8')) : null;
+  if (!(name in cache)) cache[name] = readTable(TABLES + name, name); // content.json 표 패치 적용 (upserts.ts)
   return cache[name];
 }
 let maps: { girls: Map<number, any>; cars: Map<number, any>; parts: Map<number, any>; areas: Map<number, any>; attr: Map<number, any> } | null = null;

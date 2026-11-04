@@ -16,11 +16,14 @@
 //      기록: 첫 S 클리어 = S·A·B 보너스 동시 → 코인 1600 + 캐시 2 (RewardInfo.Coin 2200 = 600 + 1600).
 // 등급 판정: S 미스·배드 0, A 미스 0 (기록 3-15: 배드 1 -> A), B 그 외(추정). 보너스를 하나씩 받을 때의 금액 배분은 추정.
 import { readFileSync, existsSync } from 'node:fs';
+import { readTable } from '../upserts.js';
 import { register, type Msg, type Ctx } from '../rpc.js';
 import { grantItem } from '../inventory.js';
 import { ensureGirl, newGirlRecord } from './girls.js';
 import { evalGirlUnlocks } from '../girlunlock.js';
 import { refreshQuests, questEvent } from '../quests.js';
+import { isEventZone, eventStart, eventResult, eventReward } from './event.js';
+import { weeklyStart, weeklyResult } from './weekly.js';
 import { table as gtable, areaOf, areaRace, finalAttr, makeOpponent, newOwnedCar, randomPart, grantPart, carDefOf, relativeDifficulty, syncGirl } from '../gamecalc.js';
 
 const ST = { PLAYABLE: 1, CLEAR: 2, FAIL: 4, LOCKED: 8, WIN: 16 } as const;
@@ -38,7 +41,7 @@ const FUEL_FILL_SEC = 15;
 const tables = new URL('../../data/tables/', import.meta.url).pathname;
 const cache: Record<string, any> = {};
 function table(name: string) {
-  if (!(name in cache)) cache[name] = existsSync(tables + name) ? JSON.parse(readFileSync(tables + name, 'utf8')) : null;
+  if (!(name in cache)) cache[name] = readTable(tables + name, name); // content.json 표 패치 적용
   return cache[name];
 }
 let trackById: Map<number, any> | null = null;
@@ -140,22 +143,25 @@ const isGirlRace = (race: any) => !!race.UnlockGirlInfo || Number(areaRace(race.
 const TUT_UNLOCK_RACE = 4096;
 
 register('MsgBattleStartReq', (body, ctx: Ctx): Msg[] => {
+  if (Number(body?.RaceType) === 3) return weeklyStart(body, ctx); // 주간 레이스 (weekly.ts)
   const snap = ctx.store.getUser(ctx.session.accountId);
-  const { race } = findRace(snap ?? {}, body?.ZoneId, body?.BattleId);
+  const { zone, race } = findRace(snap ?? {}, body?.ZoneId, body?.BattleId);
   const car = snap && currentCar(snap);
   if (!snap || !race || !car || race.State & ST.LOCKED) {
     return [{ name: 'MsgBattleStartAns', body: { Seq: 1, Result: 0, BattleId: body?.BattleId } }];
   }
   const ui = snap.UserInfo;
   const cost = Number(car.FuelConsume) || 20;
-  if (!ctx.cheat.enabled || !ctx.cheat.infiniteFuel) {
+  const ev = isEventZone(body?.ZoneId);
+  if (ev) { const fail = eventStart(snap, zone, race, car); if (fail) return fail; } // 이벤트: 연료 대신 입장권 (event.ts)
+  else if (!ctx.cheat.enabled || !ctx.cheat.infiniteFuel) {
     if (fuelNow(ui) < cost) return [{ name: 'MsgBattleStartAns', body: { Seq: 1, Result: 0, UserInfo: ui } }];
     spendFuel(ui, cost);
   }
   if (Number(ui.Completion) & TUT_FIRST_SELECT) ui.Completion = Number(ui.Completion) | TUT_INFO_FIRST_GIRL;
   // 캐릭터 레이스 시작 시 UnlockRace 튜토리얼 비트 (실기록: 2-25 시작 응답에서 Completion |= 4096)
   if (isGirlRace(race)) ui.Completion = Number(ui.Completion) | TUT_UNLOCK_RACE;
-  race.TryCount = (Number(race.TryCount) || 0) + 1;
+  if (!ev) race.TryCount = (Number(race.TryCount) || 0) + 1; // 이벤트는 eventStart 에서
   // 니트로 아이템(60022 'Nitro_0'): 가지고 있으면 시작 응답 NitroReadyNum 1, 결과 때 1개 소모 (실기록 2026-11-02 3-5:
   //   시작 NitroReadyNum 1, 결과 최상위 ItemInfo {Itemid, Itemtype 60022, StackNum 0}). 한 번에 1개만 쓰는 것은 추정.
   const nitroItem = (snap.Items?.ItemInfo ?? []).find((x: any) => Number(x.Itemtype) === 60022 && Number(x.Count) > 0);
@@ -168,7 +174,7 @@ register('MsgBattleStartReq', (body, ctx: Ctx): Msg[] => {
   // 타임어택(RaceMode 2, 실기록 4-25): 시작 응답에 OpponentCarInfo·ClosedTrack 없음, 첫 시도 대본 EP<존><nn>TimeattackStart
   //   (girlMemoryTable 에 그 존의 TimeattackStart 대본이 하나뿐일 때 그것을 쓴다. 번호 규칙은 미확인)
   const timeAttack = Number(race.RaceMode) === 2;
-  const ep = race.State & ST.WIN || (girlRace && !timeAttack) ? null : epName(Number(body.ZoneId), race, 'Start');
+  const ep = ev || race.State & ST.WIN || (girlRace && !timeAttack) ? null : epName(Number(body.ZoneId), race, 'Start');
   const fa = finalAttr(girlRace ? { ...snap, UserInfo: { ...ui, PassengerGirl: -1 } } : snap, car);
   return [{
     name: 'MsgBattleStartAns',
@@ -176,10 +182,13 @@ register('MsgBattleStartReq', (body, ctx: Ctx): Msg[] => {
       Seq: 1, Result: 1, UserInfo: ui, NitroReadyNum: nitroReady, Passenger: girlRace ? -1 : ui.PassengerGirl ?? 0, GirlsSpecialSkill: [],
       RaceInfo: race, RaceType: body.RaceType ?? 1, ZoneId: body.ZoneId, BattleId: body.BattleId,
       // 시작 응답 Track = trackTable 전체 + (보스 외) ClosedTrack + Thema/LightingIndex (실기록 2-12, 2-20)
-      Track: { ...(track(race.Track?.TrackId) ?? {}), ...(race.Boss || timeAttack ? {} : { ClosedTrack: false }), Thema: race.Track?.Thema, LightingIndex: race.Track?.LightingIndex ?? 0 },
+      Track: { ...(track(race.Track?.TrackId) ?? {}), ...(race.Boss || timeAttack || ev ? {} : { ClosedTrack: false }), Thema: race.Track?.Thema, LightingIndex: race.Track?.LightingIndex ?? 0,
+        ...(ev && race.Track?.Reborn ? { Reborn: { ...(track(race.Track?.TrackId)?.Reborn ?? {}), ...race.Track.Reborn } } : {}) },
       MyCarInfo: { ...car, FinalAttr: fa },
       ...(timeAttack ? {} : { OpponentCarInfo: race.OpponentCarInfo }), Boss: Number(race.Boss) || 0, ForceWin: forceWin, MyPosition: 0,
-      RaceLevel: body.RaceLevel ?? 1, RelativeDifficulty: relativeDifficulty(fa, race.OpponentCarInfo),
+      RaceLevel: body.RaceLevel ?? 1,
+      // 이벤트: RelativeDifficulty 없음, RaceZone [{ZoneId, LeftTryCount, ExpireTime}] (기록 3103 시작 8건)
+      ...(ev ? { RaceZone: [{ ZoneId: zone.ZoneId, LeftTryCount: zone.LeftTryCount, ExpireTime: zone.ExpireTime ?? 0 }] } : { RelativeDifficulty: relativeDifficulty(fa, race.OpponentCarInfo) }),
       ...(girlRace ? { NewGirl: Number(race.UnlockGirlInfo?.Girlid) } : {}),
       ...(ep ? { CallScript: [{ Name: ep, Girlid: 0, FmLevel: -1 }] } : {}),
       ReplaySeed: Math.floor(Math.random() * 2 ** 31),
@@ -247,10 +256,12 @@ function ensureGirlRaces(zone: any): any[] {
 }
 
 register('MsgBattleResultReq', (body, ctx: Ctx): Msg[] => {
+  if (Number(body?.RaceType) === 3) return weeklyResult(body, ctx); // 주간 레이스 (weekly.ts)
   const snap = ctx.store.getUser(ctx.session.accountId);
   const { zone, race } = findRace(snap ?? {}, body?.ZoneId, body?.BattleId);
   const car = snap && currentCar(snap);
   if (!snap || !zone || !race || !car) return [{ name: 'MsgBattleResultAns', body: { Seq: 1, Result: 0 } }];
+  if (isEventZone(zone.ZoneId)) return eventResult(body, ctx, snap, zone, race, car);
   const ui = snap.UserInfo;
   // 기권: 실클라이언트 withdrawRace 요청 {Withdraw:true, IsPlayerWin:false}. 실기록: 경험치 패배 몫, 친밀도 +, 기록 0.
   const withdraw = !!body.Withdraw;
@@ -477,6 +488,7 @@ register('MsgRaceRewardReq', (body, ctx: Ctx): Msg[] => {
   const snap = ctx.store.getUser(ctx.session.accountId);
   const { zone, race } = findRace(snap ?? {}, body?.ZoneId, body?.RaceId);
   if (!snap || !zone || !race) return [{ name: 'MsgRaceRewardAns', body: { Seq: 1, Result: 0 } }];
+  if (isEventZone(zone.ZoneId)) return eventReward(body, ctx, snap, zone, race);
   const before = structuredClone(race);
   const reward: any = { Coin: 0, Charexp: 0, Cash: 0, Familiartity: 0, ItemInfo: [], CarInfo: [] };
   const topItems: any[] = [];
