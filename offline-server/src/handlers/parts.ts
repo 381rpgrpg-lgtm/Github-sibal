@@ -29,7 +29,12 @@ function init() {
 const TUT_EQUIP_PARTS = 65536;
 // 슬롯 비용 (실측): ★1 차량 슬롯 2 = 100코인, ★2 차량 슬롯 2 = 200코인. 최대 슬롯은 cars.json Slot(★1 2, ★2 3).
 //   ★1 슬롯 3 요청은 실서버 Result 2. 그 외 조합(슬롯 3 이상, ★3 이상)은 실측 없음 -> 거절.
-const SLOT_COST: Record<string, { Coin?: number; Cash?: number }> = { '1|2': { Coin: 100 }, '2|2': { Coin: 200 }, '2|3': { Coin: 400 } }; // ★2 슬롯 3 = 400 (실측)
+// ★4 (TOFU++ 10604) 실측 2026-11-03~04: 슬롯 2·3 = 코인 2400, 슬롯 4 = 코인 14400 (2026-11-04 개방, 코인 259947 -> 245547).
+//   11-03 에는 슬롯 4 비용 조회가 2400 이었고 개방은 Result 18 로 거절됐다(그때 레벨 9). 레벨 조건 여부는 미확인.
+const SLOT_COST: Record<string, { Coin?: number; Cash?: number }> = {
+  '1|2': { Coin: 100 }, '2|2': { Coin: 200 }, '2|3': { Coin: 400 }, // ★2 슬롯 3 = 400 (실측)
+  '4|2': { Coin: 2400 }, '4|3': { Coin: 2400 }, '4|4': { Coin: 14400 },
+};
 import { carDef } from './upgradecalc.js';
 const slotCost = (car: any, slot: number) => {
   const max = Number(carDef(car.Cartype)?.Slot) || 2;
