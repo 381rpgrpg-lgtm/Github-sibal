@@ -711,8 +711,12 @@ async function playRace(t) {
   }
   if (t.mode === 'event' || t.mode === 'weekly') {
     await page.mouse.click(460, 610); await sleep(2500);         // '새 거리 단어' 팝업 OK (없으면 빈 곳)
-    await page.mouse.click(1190, 640); await sleep(7000);        // Challenge
-    if (t.mode === 'event') { await page.mouse.click(485, 450); await sleep(8000); await page.mouse.click(EVENT_CARD_X[t.card], 450); await sleep(8000); }
+    reqSeen.length = 0;
+    await page.mouse.click(1190, 640); await sleep(10000);       // Challenge (카드가 밀려 들어오는 중에 누르면 옆 카드가 눌린다: 7초 -> 10초)
+    if (t.mode === 'event') { await page.mouse.click(485, 450); await sleep(8000);
+      // 이벤트 카드 대신 주간 레이스가 열린 경우(2026-11-05 17:34: 주간 화면에서 노드 클릭) 바로 그만둔다
+      if (reqSeen.includes('MsgGetWRaceInfoReq')) { log('event: weekly screen opened instead'); await shot('ev-wrong'); return 'noresult'; }
+      await page.mouse.click(EVENT_CARD_X[t.card], 450); await sleep(8000); }
     else { await page.mouse.click(175, 450); await sleep(8000); await page.mouse.click(1040, 665); await sleep(5000); await page.mouse.click(1040, 388); await sleep(2500); await page.mouse.click(818, 502); await sleep(2500); } // 현재 설정 가져오기 확인 창
     await evalJ(DRIVER); await evalJ('window.__botSmart = false; window.__botLead = 0; window.__botLeadEnd = 0');
     tp('map');
