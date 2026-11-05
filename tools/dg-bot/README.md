@@ -18,6 +18,12 @@
 - 도구: `dump-ud.cjs` 계정 상태 저장, `inv.cjs` 보관함 정리, `use-item.cjs`, `carwork.cjs` 차량 육성·조합(`--dry-run` 지원),
   `q.cjs` 단일 RPC, `audit-quests.cjs` 퀘스트 목표 형식 점검, `explore.cjs`·`ex/` 화면 탐색, `live.cjs`·`do.sh` 수동 조작, `timing.cjs`
 - 시험: `test-safety.cjs` (관문 26건), `test-tidy.cjs` (아이템 정리 모의 실행) — 둘 다 네트워크 없이 `run/ud.json` 기준
+- 2026-11-05 추가: `perf.mjs` 차량 x 동승자 총 성능(오프라인 서버 finalAttr), `touge.cjs` Haunted Pass Board 무료 주사위만 굴리기,
+  `rpc-nologin.cjs` 로그인 없는 조회 RPC(경주 중 안전), `peek-girl.cjs` 히로인 기분·삐침 확인, `coat-once.cjs` 코인 코팅 1회,
+  `f-trial.cjs` F 기능 시험, `watch2.sh` 세션 감시(중계 재시작), 제어 파일 `run/NORACE` (브라우저 경주 없이 RPC 일만)
+- 봇 동작 (2026-11-05): World Tour(LeftTry·티켓>3), 허브 진입 시 색으로 확인한 버튼만 누름(공지 팝업 X·대사 화살표·퀘스트 창 X),
+  어려운 경주는 최강 차+동승자, 삐친 캐릭터 우선 데이트, 데이트 답을 반응으로 학습(`run/date-learned.json`), 보상 연료 아이템 사용,
+  ★5 대상은 등급 차 3 이하 재료만(남는 낮은 등급은 ★3·★4 보조 강화), 기분 변화 기록 `run/samples-mood.jsonl`
 
 ## 운영 원칙 (사용자 지시)
 - Gold Cash 사용 금지, 캐시는 최소 사용. 코인은 쌓아 두지 않고 적정선에서 (차량 상자는 15만 초과분, 하루 8개)
