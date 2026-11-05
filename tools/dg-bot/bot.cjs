@@ -629,17 +629,44 @@ async function openGame() {
     if (pd.includes('MsgSpecialMessageListReq')) hubSeen = true;
     try { reqSeen.push(JSON.parse(pd).name); if (reqSeen.length > 200) reqSeen.splice(0, 100); } catch {} });
   mark('launched');
+  reqSeen.length = 0; // 이번 접속의 요청만 (허브 대기에서 로그인 시점 판단)
   await page.goto(B + '/', { waitUntil: 'domcontentloaded' });
   mark('loaded');
   await page.waitForSelector('input', { timeout: 180000 });
   mark('input');
   const ins = await page.$$('input');
   await ins[0].fill('damissi'); await ins[1].fill('offline'); await ins[1].press('Enter');
-  // 허브 대기 420초: 소프트웨어 렌더링(1~2fps)에서 로그인 -> 허브가 260초 안팎 걸린다 (2026-11-05 10:07 'hub:263'). 240초 제한이면 가끔 '허브 못 감'
-  for (let i = 0; i < 210 && !hubSeen; i++) await sleep(2000);
+  // 허브 대기 420초: 소프트웨어 렌더링(1~2fps)에서 로그인 -> 허브가 260초 안팎 걸린다 (2026-11-05 10:07 'hub:263').
+  //   허브 신호(MsgSpecialMessageListReq)는 로그인 뒤 공지 팝업(예: Haunted Pass Board 홍보, 3개)과 히로인 인사 대사를 다 넘겨야 나간다
+  //   (2026-11-05 16:00~). 색으로 확인한 버튼만 누른다: 팝업 X(1240,103 흰색) -> 대사 넘김 화살표(1236,676 흰색) -> 퀘스트 창 X(1052,100).
+  //   (팝업 그림 영역을 누르면 상점 정기구독 화면으로 넘어간 일이 있어 그 밖은 누르지 않는다)
+  let tLogin = 0;
+  for (let i = 0; i < 210 && !hubSeen; i++) {
+    await sleep(2000);
+    if (!tLogin && reqSeen.includes('MsgLoginReq')) tLogin = Date.now();
+    if (!tLogin || Date.now() - tLogin < 30000 || i % 5 !== 0) continue;
+    try {
+      await page.screenshot({ path: `${OUT}/login-step.png`, timeout: 30000 });
+      const p = JSON.parse(require('child_process').execFileSync('python3', ['-I', '-c',
+        "import sys,json;from PIL import Image;im=Image.open(sys.argv[1]).convert('RGB');print(json.dumps([min(im.getpixel(v)) for v in [(1240,103),(1236,676),(1052,100)]]))",
+        `${OUT}/login-step.png`], { encoding: 'utf8' }));
+      if (hubSeen) break;
+      if (p[0] > 230) await page.mouse.click(1240, 103); else if (p[1] > 230) await page.mouse.click(1236, 676); else if (p[2] > 230) await page.mouse.click(1052, 100);
+    } catch (e) { log('login step err ' + e); }
+  }
   mark('hub');
   await sleep(8000);
-  for (let i = 0; i < 3; i++) { await page.mouse.click(1240, 103); await sleep(2500); }
+  // 허브 뒤 남은 창: 색으로 확인한 X·대사 화살표·퀘스트 창 X 만 (빈 허브의 1240,103 은 퀘스트 목록을 연다)
+  for (let i = 0; i < 4; i++) {
+    try {
+      await page.screenshot({ path: `${OUT}/login-step.png`, timeout: 30000 });
+      const p = JSON.parse(require('child_process').execFileSync('python3', ['-I', '-c',
+        "import sys,json;from PIL import Image;im=Image.open(sys.argv[1]).convert('RGB');print(json.dumps([min(im.getpixel(v)) for v in [(1240,103),(1236,676),(1052,100)]]))",
+        `${OUT}/login-step.png`], { encoding: 'utf8' }));
+      if (p[0] > 230) await page.mouse.click(1240, 103); else if (p[1] > 230) await page.mouse.click(1236, 676); else if (p[2] > 230) await page.mouse.click(1052, 100); else break;
+      await sleep(3000);
+    } catch (e) { log('hub step err ' + e); break; }
+  }
   await page.mouse.click(640, 590); await sleep(2000);
   return hubSeen;
 }
@@ -655,7 +682,7 @@ async function playRace(t) {
   const xy = pos ? POS[pos] : null;
   if ((t.mode === 'story' || !t.mode) && !xy) { log(`unknown RacePos ${pos} for ${t.zone}-${t.race.RaceIndex}`); return 'nopos'; }
   const tp0 = Date.now(), tp = (n) => phases.push(`${n}:${Math.round((Date.now() - tp0) / 1000)}`); const phases = [];
-  if (!(await openGame())) { log('hub not reached'); return 'nohub'; }
+  if (!(await openGame())) { log(`hub not reached (requests: ${reqSeen.slice(-8).join(',')} |${ogt})`); await shot('nohub'); return 'nohub'; }
   tp('hub');
   if (t.mode === 'worldtour') {
     // 월드 투어 (2026-11-05 기록): 허브 Challenge(1190,640) -> World Tour 카드(795,450) -> Start Race(1080,662)
@@ -885,6 +912,23 @@ async function finishRace(t, tp, phases) {
     const key = t.race?.RaceId ?? t.mode;
     log(`${t.mode === 'event' ? 'event' : t.mode === 'weekly' ? 'weekly' : t.mode === 'worldtour' ? 'worldtour' : t.farm ? 'farm' : 'target'} ${t.zone}-${t.race?.RaceIndex} (${key})${t.daily ? ' daily' : ''} fuel ${fuelNow} coin ${ud.UserInfo.Coin} cash ${ud.UserInfo.Cash} lv ${ud.UserInfo.Charlevel}`);
     t.smart = (fails[key] ?? 0) >= 2 || fs.existsSync(`${OUT}/SMART`); if (t.smart) log('smart nitro mode');
+    // 성능 조합 (perf.mjs = 오프라인 서버 finalAttr, 실기록과 일치): 퀘스트 동승·해금 동승이 없으면 현재 차에 가장 센 동승자.
+    //   월드 투어·한 번 이상 진 본편은 가장 센 차+동승자 (2026-11-05: ★5 Lv1 + 퀘스트 끝난 동승자 1799 vs ★4 + 서아 2572, 8-20 보스 연패)
+    try {
+      const needGirl = rideObj && !questCar && !SAFE.progressSkipped(`ride:${rideObj.Id}:${rideObj.ObjId}`) ? Number(rideObj.Param[4]) : (unlockGirl || 0);
+      const hard = t.mode === 'worldtour' || (!t.farm && !t.quest && !t.mode && (fails[key] ?? 0) >= 1);
+      if (hard || !needGirl) {
+        fs.writeFileSync(`${OUT}/ud-perf.json`, JSON.stringify(ud));
+        const pr = JSON.parse(require('child_process').execFileSync('node', [__dirname + '/perf.mjs', `${OUT}/ud-perf.json`, '200'], { encoding: 'utf8', timeout: 60000 }));
+        const ok = (r) => (!needGirl || r.girl === needGirl) && (hard || r.car === ud.UserInfo.Currentcar);
+        const b = pr.best.find(ok);
+        if (b && (b.car !== ud.UserInfo.Currentcar || b.girl !== Number(ud.UserInfo.PassengerGirl)) && b.perf > (pr.current?.perf ?? 0)) {
+          if (b.car !== ud.UserInfo.Currentcar) await rpc('MsgSetCurrentCarReq', { CarInfo: { Carid: b.car } });
+          if (b.girl !== Number(ud.UserInfo.PassengerGirl)) await rpc('MsgSelectPassengerReq', { Passenger: b.girl });
+          act(`best combo for ${key}: car ${b.car} + girl ${b.girl} perf ${pr.current?.perf} -> ${b.perf}${hard ? ' (hard)' : ''}`);
+        }
+      }
+    } catch (e) { log('perf err ' + e); }
     let r;
     try { r = await playRace(t); } catch (e) { log('play err ' + e); r = 'err'; }
     if (r !== 'win' && r !== 'lose') SAFE.progressUndo(); // 끝나지 않은 시도는 진척 감시에서 빼기
