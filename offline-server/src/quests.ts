@@ -86,8 +86,10 @@ function evaluate(snap: any, rec: any): boolean {
   for (const o of q.Objective ?? []) {
     const r = rec.Objective.find((x: any) => Number(x.ObjId) === Number(o.ObjId));
     if (!r) continue;
-    const v = stateValue(snap, o);
     const need = Number(o.Param?.[0]) || 1;
+    // 캐시로 완료한 목표(MsgNquestObjectiveClearReq, CashCleared)는 상태형이어도 다시 계산하지 않고 달성으로 둔다
+    if (r.CashCleared) { if (Number(r.CurrentValue) < need) { r.CurrentValue = need; changed = true; } continue; }
+    const v = stateValue(snap, o);
     if (v !== null) { const nv = Math.min(v, need); if (nv !== r.CurrentValue) { r.CurrentValue = nv; changed = true; } }
   }
   if (Number(rec.State) === S_ACCEPT) {

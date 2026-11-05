@@ -26,10 +26,25 @@ export function wraceTemplate(): any {
 const trackFull = (id: number) => (table('trackTable.json')?.Track ?? []).find((x: any) => Number(x.TrackId) === Number(id)) ?? null;
 const currentCar = (snap: any) => (snap.Cars?.CarInfo ?? []).find((c: any) => Number(c.Carid) === Number(snap.UserInfo?.Currentcar)) ?? null;
 
-/** 이번 시즌 내 최고 기록 (snap.wraceBest = {season, best: {WRaceId: 초}}) */
+/** 이번 시즌 내 최고 기록 (snap.wraceBest = {season, best: {WRaceId: 초}}).
+ *  시즌이 바뀌면 지난 기록은 snap.wracePrev 로 옮기고, 그 결과를 계정 데이터 WraceResult/MyWRaceResult 로 싣는다
+ *  (클라이언트는 이 결과가 있을 때 주간 레이스 결과 창과 '보상 받기' -> MsgWRaceRewardReq {WSeasonId} 를 띄운다, misc2.ts).
+ *  추정: 결과 형식은 WraceSet/MyWRaceRec 과 같은 모양(클라이언트 GetResultWRace/GetResultMyWRank 가 같은 필드를 읽는다), 혼자라 1위. */
 export function myBest(snap: any): Record<string, number> {
   const s = weeklySeason().id;
-  if (snap.wraceBest?.season !== s) snap.wraceBest = { season: s, best: {} };
+  if (snap.wraceBest?.season !== s) {
+    const old = snap.wraceBest;
+    if (old && Object.values(old.best ?? {}).some((t: any) => Number(t) > 0)) {
+      snap.wracePrev = { season: Number(old.season), best: old.best };
+      const races = wraceTemplate().WRace.map((w: any) => ({ ...w, WSeasonId: Number(old.season),
+        Rank: old.best[w.WRaceId] ? [{ Rank: 1, UserName: snap.UserInfo?.Charname ?? '', TimeRecord: old.best[w.WRaceId] }] : [] }));
+      const start = Number(old.season) * WEEK;
+      snap.WraceResult = { WRace: races, WSeasonId: Number(old.season), StartDate: start, EndDate: start + WEEK, Version: 1 };
+      snap.MyWRaceResult = { MyRank: races.map((w: any) => ({ WRaceId: w.WRaceId, LeftTry: 0, TryCost: { Cash: 0 },
+        ...(old.best[w.WRaceId] ? { TimeRecord: old.best[w.WRaceId], Rank: 1, RankPercent: 0 } : {}) })) };
+    }
+    snap.wraceBest = { season: s, best: {} };
+  }
   return snap.wraceBest.best;
 }
 export function myRank(snap: any, races: any[]): any[] {

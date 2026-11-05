@@ -228,7 +228,10 @@ register('MsgGetWRaceInfoReq', (_b, ctx): Msg[] => {
   const set = snap ? wraceSet(snap) : null;
   if (!snap || !set) return [{ name: 'MsgGetWRaceInfoAns', body: { Seq: 1, Result: 0 } }];
   // 내 이번 시즌 최고 기록만 순위에 넣는다 (weekly.ts). 오프라인이라 다른 플레이어 순위는 없다.
-  return [{ name: 'MsgGetWRaceInfoAns', body: { Seq: 1, WraceSet: set, MyWRaceRec: { MyRank: myRank(snap, set.WRace) }, UserInfo: snap.UserInfo } }];
+  // 지난 시즌 결과가 있으면 함께 (weekly.ts myBest 가 시즌이 바뀔 때 만든다, 받으면 misc2 MsgWRaceRewardReq 가 지운다)
+  ctx.store.putUser(ctx.session.accountId, snap);
+  return [{ name: 'MsgGetWRaceInfoAns', body: { Seq: 1, WraceSet: set, MyWRaceRec: { MyRank: myRank(snap, set.WRace) }, UserInfo: snap.UserInfo,
+    ...(snap.WraceResult ? { WraceResult: snap.WraceResult, MyWRaceResult: snap.MyWRaceResult } : {}) } }];
 });
 
 // ── 꾸미기 장착 MsgCosmeticEquipReq {Carid, Type, Id} -> {Result 1, Cosmetics, CarInfo:[차량]}
