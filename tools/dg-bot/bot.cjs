@@ -769,6 +769,10 @@ async function finishRace(t, tp, phases) {
     let ud; const nAct = stats.actions.length; SAFE.progressCommit();
     try { ud = await manage(); } catch (e) { log('manage err ' + e); await sleep(60000); continue; }
     if (!ud) { await sleep(120000); continue; }
+    // NORACE: 브라우저 경주 없이 RPC 일(데이트·퀘스트·강화·보상)만 5분마다 (다른 브라우저 작업과 CPU 를 나눌 때, 2026-11-05)
+    if (fs.existsSync(`${OUT}/NORACE`)) { if (!globalThis.__noraceLogged) log('NORACE: RPC tasks only'); globalThis.__noraceLogged = 1;
+      if (browser) { try { await browser.close(); } catch {} browser = null; } await sleep(300e3); continue; }
+    globalThis.__noraceLogged = 0;
     globalThis.__ud = ud; // eventRace() 의 참가 조건 확인용
     // 기분 변화 기록 (삐침 조건 수집): 히로인별 Emotion·CauseOfPeevish 가 바뀌면 run/samples-mood.jsonl 에 (현재 동승자·직전 활동 포함)
     try {
