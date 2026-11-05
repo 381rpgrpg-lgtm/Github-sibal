@@ -1,9 +1,9 @@
-// 메인 허브에서 주기적으로 호출되는 메시지. 오프라인에서는 특별 메시지·결제 연출·거리 이름 이벤트가 없다.
+// 메인 허브에서 주기적으로 호출되는 메시지. 오프라인에서는 특별 메시지·결제 연출이 없다.
 // 응답 형식은 클라이언트 구독부에서 확인: 각 Ans 의 배열 필드가 없거나 비면 아무것도 표시하지 않는다.
-import { readdirSync, readFileSync } from 'node:fs';
 import { register, type Msg } from '../rpc.js';
 import { table } from '../gamecalc.js';
 import { grantItem } from '../inventory.js';
+import { streetCheck, streetView, streetSeen } from '../street.js';
 
 // 특별 메시지(운영 공지성 팝업) 목록 — 없음.
 register('MsgSpecialMessageListReq', (): Msg[] => [
@@ -17,32 +17,23 @@ register('MsgPurchaseRevealReq', (): Msg[] => [
 ]);
 register('MsgPurchaseRevealSeenReq', (): Msg[] => [{ name: 'MsgPurchaseRevealSeenAns', body: { Result: 1 } }]);
 
-// 거리 이름 이벤트 — Open=false 이면 클라이언트가 아무 것도 하지 않는다.
-// 거리 이름 목록 MsgStreetNamesReq. 실기록(2026-11-04 1380): {Seq, Result 1, Open true, Name null|{P,C,E}, Public, Suggest {P,C,E}, Earned [단어 id ...]}.
-//   단어 획득 조건(레이스 연승·퍼펙트 스타트·대전 횟수 등)은 엔진 코드 Qe(...) 정의에 있으나 오프라인 통계가 없어 미구현.
-//   추정: 획득 목록 = 계정에 저장된 것(snap.streetEarned) 또는 가장 최근 녹화의 Earned, 이름은 misc2 의 MsgStreetNameSetReq 가 저장한 snap.streetName.
-let recordedStreet: any = undefined;
-function lastRecordedStreet(): any {
-  if (recordedStreet !== undefined) return recordedStreet;
-  recordedStreet = null;
-  try {
-    const dir = new URL('../../data/recorded/', import.meta.url).pathname;
-    const f = readdirSync(dir).filter((x) => x.endsWith('_MsgStreetNamesReq.json')).sort((a, b) => Number(b.split('_')[1]) - Number(a.split('_')[1]))[0];
-    if (f) recordedStreet = JSON.parse(readFileSync(dir + f, 'utf8')).response?.messages?.find((m: any) => m.name === 'MsgStreetNamesAns')?.body ?? null;
-  } catch { recordedStreet = null; }
-  return recordedStreet;
-}
+// 거리 이름 목록 MsgStreetNamesReq -> {Seq, Result 1, Open true, Name, Public, Suggest {P,C,E}, Earned [단어 id, 획득 순], New [안 본 것], Facts}
+//   (실기록 21건). 단어 판정·통계는 street.ts. 레이스 밖에서 바뀌는 통계(업적·앨범·월드 투어 등)로 만족한 단어도 여기서 획득 -> New (추정).
+//   클라이언트 StreetNamesClient: 첫 확인 때 New 를 공개 팝업 대기열에 넣고, 닫으면 MsgStreetNameSeenReq {Ids}.
 register('MsgStreetNamesReq', (_b, ctx): Msg[] => {
   const snap = ctx.store.getUser(ctx.session.accountId);
-  const rec = lastRecordedStreet();
-  const earned: string[] = snap?.streetEarned ?? rec?.Earned ?? [];
-  const pick = (p: string) => earned.find((w) => w.startsWith(p + '_')) ?? null;
-  const suggest = rec?.Suggest ?? { P: pick('p'), C: pick('c'), E: pick('e') };
-  return [{ name: 'MsgStreetNamesAns', body: { Seq: 1, Result: 1, Open: true, Name: snap?.streetName?.Name ?? null, Public: snap?.streetName?.Public ?? null, Suggest: suggest, Earned: earned } }];
+  if (!snap) return [{ name: 'MsgStreetNamesAns', body: { Seq: 1, Result: 2, Open: false } }];
+  streetCheck(snap);
+  ctx.store.putUser(ctx.session.accountId, snap);
+  return [{ name: 'MsgStreetNamesAns', body: { Seq: 1, Result: 1, ...streetView(snap) } }];
 });
 
-// 거리 이름 '확인함' (실기록: {Seq, Result 1})
-register('MsgStreetNameSeenReq', (): Msg[] => [{ name: 'MsgStreetNameSeenAns', body: { Result: 1 } }]);
+// 거리 이름 '확인함' {Ids} -> {Seq, Result 1} (실기록 8건). 이후 MsgStreetNamesAns.New 에서 빠진다 (실기록 0489 -> 0556).
+register('MsgStreetNameSeenReq', (body, ctx): Msg[] => {
+  const snap = ctx.store.getUser(ctx.session.accountId);
+  if (snap) { streetSeen(snap, body?.Ids); ctx.store.putUser(ctx.session.accountId, snap); }
+  return [{ name: 'MsgStreetNameSeenAns', body: { Seq: 1, Result: 1 } }];
+});
 
 // Reborn 가챠 진열 (실기록 고정값: 79610 상자, 대표 차량 3종)
 register('MsgRebornGachaShowcaseReq', (): Msg[] => [{ name: 'MsgRebornGachaShowcaseAns', body: {

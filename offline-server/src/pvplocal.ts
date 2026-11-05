@@ -14,6 +14,7 @@ import { WebSocket } from 'ws';
 import type { Auth } from './auth.js';
 import type { Store } from './db.js';
 import { table, finalAttr, carDefOf, makeOpponent, carName, ATTRS } from './gamecalc.js';
+import { streetRace, streetCheck, streetPublic, type StreetRace } from './street.js';
 
 export interface PvpLocalDeps { auth: Auth; store: Store; strict: boolean }
 
@@ -203,6 +204,7 @@ function eloDelta(me: number, opp: number, win: boolean): number {
 interface Card {
   accountId: number; name: string; level: number; carInfo: any; cartype: number; grade: number; upgradeLevel: number; perf: number;
   rating: number; wins: number; losses: number; battles: number; streak: number; best: number; mainGirl: number; passenger: number; passengerFace: number;
+  street?: any; // 거리 이름 공개형 {text, rarity, combo?} (클라이언트 대전 HUD card.street)
 }
 interface Side {
   id: number; bot: boolean; card: Card; car: any;             // car = 레이스용 차량 레코드 (Attributes = 기본값, 봇은 합성 차량)
@@ -235,13 +237,22 @@ class Player {
       carInfo: car ? { ...car, Attributes: attrs, DeltaMastery: 0 } : null, cartype: Number(car?.Cartype) || 0,
       grade: Number(car?.Grade) || Number(carDefOf(car?.Cartype)?.Grade) || 1, upgradeLevel: Number(car?.UpgradeLevel) || 1,
       perf: sumAttr(attrs), rating: st.rating, wins: st.wins, losses: st.losses, battles: st.battles, streak: st.streak, best: st.best,
-      mainGirl: Number(ui.MainGirl) || 0, passenger: pg, passengerFace: pg,
+      mainGirl: Number(ui.MainGirl) || 0, passenger: pg, passengerFace: pg, street: streetPublic(snap),
     };
   }
   profile(): any {
     const snap = this.snap();
     const st = statsOf(snap);
     return { ...this.card(snap), history: [], season: pvpSeason(), introSeen: st.introSeen };
+  }
+  /** 거리 이름 단어 (street.ts): 대전 1판을 통계에 넣고 새로 얻은 단어 id 를 돌려준다 */
+  street(r: StreetRace): string[] {
+    const snap = this.snap();
+    if (!snap) return [];
+    streetRace(snap, r);
+    const got = streetCheck(snap);
+    this.server.deps.store.putUser(this.key, snap);
+    return got;
   }
   updateStats(fn: (s: Stats) => void): Stats {
     const snap = this.snap();
@@ -565,6 +576,18 @@ class Room {
         const myTime = s.finish ?? 0, oppTime = o?.finish ?? 0;
         const res: any = { t: 'result', how: outHow, win, winner: winner?.id ?? null, myTime, oppTime, summary };
         if (!(how === 'forfeit' && loser === s)) res.answer = this.answer(s, win, myTime, oppTime);
+        // 거리 이름: 새 단어는 answer.StreetWordsNew (클라이언트 pvp 'result' 처리기가 streetNames.push). 추정: 대전도 일반 통계(races 등)에 넣는다.
+        if (res.answer && counted) {
+          const rep = s.report ?? {};
+          const snap = s.player.snap();
+          const got = s.player.street({
+            win, nitro: Number(rep.NitroUseNum) || 0, perfectStart: !!rep.PerfectStart, excellent: Number(rep.ExcellentCnt) || 0,
+            combo: Number(rep.ComboCount) || 0, speed: Number(rep.LinearMaxSpeed) || 0, time: myTime, oppTime, thema: this.track.thema,
+            car: s.player.currentCar(snap) ?? s.car, girl: Number(snap?.UserInfo?.PassengerGirl) || 0,
+            pvp: { myRating: ratings.get(s.id) ?? 1000, oppRating: o ? ratings.get(o.id) ?? 1000 : 0, rating: st.rating },
+          });
+          if (got.length) res.answer.StreetWordsNew = got;
+        }
         s.player.send(res);
       } else if (counted) {
         const d = o ? eloDelta(s.card.rating, ratings.get(o.id) ?? 1000, win) : 0;

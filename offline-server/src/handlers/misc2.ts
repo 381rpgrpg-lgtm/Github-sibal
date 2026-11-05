@@ -15,6 +15,7 @@ import { grantItem, itemDef } from '../inventory.js';
 import { refreshQuests, questDefs } from '../quests.js';
 import { levelUp } from './battle.js';
 import { weeklySeason } from './weekly.js';
+import { streetSetName } from '../street.js';
 
 const R_OK = 1, R_FAIL = 2, R_NO_COIN = 3, R_NO_CASH = 7;
 const GIRL_OPEN = 7;
@@ -134,18 +135,14 @@ register('MsgSetNicknameReq', (body, ctx): Msg[] => {
 
 // ── 거리 이름 설정 MsgStreetNameSetReq {Name:{P, C, E}} -> {Seq, Result 1, Name, Public}
 //   클라이언트 StreetNamesClient.setName: Result 1 이면 view.Name/Public 갱신, Public.combo 가 있으면 콤보 연출, 없으면 'street_saved'.
-//   실기록 MsgStreetNamesAns 는 {Open, Name, Public, Suggest, Earned, New, Facts} 로 이름을 서버가 보관한다.
-//   오프라인 MsgStreetNamesReq(main.ts)는 Open false 라 보통 이 요청이 오지 않는다. 저장 위치는 snap.streetName {Name, Public} (추정).
-//   Public 은 형식 미확인이라 true 로 둔다 (추정).
+//   실패는 Reason 문구를 nameErrorText 로 번역해 보여 준다. Public = 엔진 publicName {text, rarity, combo?} (street.ts).
+//   실서버 응답 기록은 없다 (추정: 실패 Result 2, 획득하지 않은 단어는 'A word is not earned yet').
 register('MsgStreetNameSetReq', (body, ctx): Msg[] => {
   const snap = ctx.store.getUser(uid(ctx));
-  const n = body?.Name;
-  const ok = n && typeof n === 'object' && ['P', 'C', 'E'].every((k) => n[k] === undefined || typeof n[k] === 'string') && (n.P || n.C || n.E);
-  if (!snap || !ok) return [{ name: 'MsgStreetNameSetAns', body: { Seq: 1, Result: R_FAIL, Reason: 'Invalid name.' } }];
-  const Name = { P: String(n.P ?? ''), C: String(n.C ?? ''), E: String(n.E ?? '') };
-  snap.streetName = { Name, Public: true };
+  const r = snap ? streetSetName(snap, body?.Name) : { ok: false, Reason: 'Try again in a moment.' };
+  if (!snap || !r.ok) return [{ name: 'MsgStreetNameSetAns', body: { Seq: 1, Result: R_FAIL, Reason: r.Reason } }];
   ctx.store.putUser(uid(ctx), snap);
-  return [{ name: 'MsgStreetNameSetAns', body: { Seq: 1, Result: R_OK, Name, Public: true } }];
+  return [{ name: 'MsgStreetNameSetAns', body: { Seq: 1, Result: R_OK, Name: r.Name, Public: r.Public } }];
 });
 
 // ── 상점 NEW 표시 끄기 MsgHideNewShopItemReq {HideNewShopItems:[StoreItemId...]} -> {Seq, Result 1, NewShopItems}

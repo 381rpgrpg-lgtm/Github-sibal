@@ -6,6 +6,7 @@ import type { Session } from './auth.js';
 import type { Upstream } from './upstream.js';
 import { achBefore, achAfter } from './achievements.js';
 import { dailyReset } from './daily.js';
+import { streetAfter } from './street.js';
 
 export interface Ctx {
   store: Store;
@@ -70,6 +71,12 @@ export async function dispatch(name: string, body: any, ctx: Ctx): Promise<{ mes
   const pre = preSnap ? achBefore(preSnap) : null;
   preSnap = null;
   const messages = await fn(body, ctx);
+  // 거리 이름 단어 (street.ts): 레이스 시작·결과 뒤 통계 반영, 새 단어는 결과 응답 StreetWordsNew.
+  //   업적 처리보다 먼저: 실기록 2026-11-02 업적 수(ach)가 19 -> 21 이 된 결과가 아니라 다음 결과에서 c_achiever(ach 20).
+  if (id && (name === 'MsgBattleStartReq' || name === 'MsgBattleResultReq')) {
+    const snap = ctx.store.getUser(id);
+    if (streetAfter(snap, name, body, messages)) ctx.store.putUser(id, snap);
+  }
   if (pre && id) {
     const snap = ctx.store.getUser(id);
     if (achAfter(snap, pre, name, body, messages)) ctx.store.putUser(id, snap);
