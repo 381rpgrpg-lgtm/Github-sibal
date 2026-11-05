@@ -24,6 +24,7 @@ import { evalGirlUnlocks } from '../girlunlock.js';
 import { refreshQuests, questEvent } from '../quests.js';
 import { isEventZone, eventStart, eventResult, eventReward } from './event.js';
 import { weeklyStart, weeklyResult } from './weekly.js';
+import { worldTourStart, worldTourResult } from './worldtour.js';
 import { table as gtable, areaOf, areaRace, finalAttr, makeOpponent, newOwnedCar, randomPart, grantPart, carDefOf, relativeDifficulty, syncGirl } from '../gamecalc.js';
 
 const ST = { PLAYABLE: 1, CLEAR: 2, FAIL: 4, LOCKED: 8, WIN: 16 } as const;
@@ -150,6 +151,7 @@ const TUT_UNLOCK_RACE = 4096;
 
 register('MsgBattleStartReq', (body, ctx: Ctx): Msg[] => {
   if (Number(body?.RaceType) === 3) return weeklyStart(body, ctx); // 주간 레이스 (weekly.ts)
+  if (Number(body?.RaceType) === 4) return worldTourStart(body, ctx); // 월드 투어 (worldtour.ts)
   const snap = ctx.store.getUser(ctx.session.accountId);
   const { zone, race } = findRace(snap ?? {}, body?.ZoneId, body?.BattleId);
   const car = snap && currentCar(snap);
@@ -263,6 +265,7 @@ function ensureGirlRaces(zone: any): any[] {
 
 register('MsgBattleResultReq', (body, ctx: Ctx): Msg[] => {
   if (Number(body?.RaceType) === 3) return weeklyResult(body, ctx); // 주간 레이스 (weekly.ts)
+  if (Number(body?.RaceType) === 4) return worldTourResult(body, ctx); // 월드 투어 (worldtour.ts)
   const snap = ctx.store.getUser(ctx.session.accountId);
   const { zone, race } = findRace(snap ?? {}, body?.ZoneId, body?.BattleId);
   const car = snap && currentCar(snap);

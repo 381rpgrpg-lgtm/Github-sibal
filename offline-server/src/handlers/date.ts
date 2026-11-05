@@ -167,7 +167,7 @@ function placeMood(girl: number, placeId: number, lastPlace = 0): { notice: any;
   return null;
 }
 
-interface DateState { girl: number; place: number; lv: number; tutorial: boolean; likes: number; dislikes: number;
+interface DateState { girl: number; place: number; lv: number; tutorial: boolean; likes: number; dislikes: number; peevish?: boolean;
   chat: string | null; chatSat: number; resultIndex: number; finalIndex: number; satisfaction?: number; end?: string;
   events?: string[]; gift?: boolean;
   dept?: { scripts: string[]; gift?: { index: number; count: number; delta: number } } }
@@ -255,7 +255,21 @@ register('MsgDateStartReq', (body, ctx): Msg[] => {
       return o;
     })) : null;
   const events = moodChunk ? [mood!.event] : [];
-  if (tutorial || !hasQuestions(girl, place.ScriptName, lv)) {
+  if (!tutorial && Number(g.Emotion) === 1 && scriptRows(girl, 'Date_Peevish', lv).length) {
+    // 삐친 캐릭터와의 데이트 (실기록 2026-11-05, 20101 원인 11): 대본 [Date_Peevish(CHANGE [장소, 캐릭터, SYSTEM, face_peevish, 장소 소리]),
+    //   Date_End_Peevish, {장소 대본 Index 1, Index 2}], 문항 없음. Index 1 -> 만족도 1(친밀도 x0.5), Index 2 -> 결과에서 기분 0·원인 0 (풀림)
+    const fix = (r: any) => { const o = toIns(r);
+      if (o.Function === 'CHANGE' && o.Parameter) {
+        if (o.Parameter[0] === 'ND') o.Parameter[0] = String(place.Id);
+        if (o.Parameter.length < 4) o.Parameter.push('face_peevish');
+        if (o.Parameter.length < 5) o.Parameter.push(place.AmbiSound || 'NONE');
+      }
+      return o; };
+    chunks.push(chunk(girl, 'Date_Peevish', lv, scriptRows(girl, 'Date_Peevish', lv).map(fix)));
+    chunks.push(chunk(girl, 'Date_End_Peevish', lv, scriptRows(girl, 'Date_End_Peevish', lv).map((r) => toIns(r))));
+    chunks.push(chunk(girl, place.ScriptName, lv, [{ Index: 1 }, { Index: 2 }]));
+    st = { girl, place: place.Id, lv, tutorial, likes: 0, dislikes: 0, chat: null, chatSat: 0, resultIndex: 1, finalIndex: 2, end: 'Date_End_Peevish', events: [], peevish: true };
+  } else if (tutorial || !hasQuestions(girl, place.ScriptName, lv)) {
     // 문항 없음: 시작, 사건(문항·선물이 있으면 Index 1), 종료, 결과·마침 인덱스
     const ev = eventChunk(girl, lv, Number(g.Familiarity) || 0, tutorial, 1);
     chunks.push(chunk(girl, place.ScriptName, lv, intro));
@@ -363,7 +377,7 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
   if (depth === 0 && index === st.resultIndex) {
     // 만족도 = 3 + 좋아한 답 - 싫어한 답 (실기록 2026-11-05 통제 실험 포함: 좋아함 2 -> 5 (28/29건), 싫어함 2 -> 1 (5/5건, 20405 lv3).
     //   예전 기록 해석 '좋아함 1·싫어함 1 -> 4' 는 1건뿐이라 3 으로 둔다(추정). 문항 없는 데이트는 3)
-    const sat = Math.max(1, Math.min(5, 3 + st.likes - st.dislikes));
+    const sat = st.peevish ? 1 : Math.max(1, Math.min(5, 3 + st.likes - st.dislikes));
     st.satisfaction = sat;
     const delta = Math.round((Number(place.Familiarity) || 0) * MULT[sat]);
     const firstAtPlace = !(g.DatingState ?? []).some((x: any) => Number(x.Placeid) === st.place);
@@ -425,7 +439,8 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
     //   추정: 싫어함 1개로 만족도 2 가 된 경우도 화남, 화남에서 4 -> 보통
     {
       const e = Number(g.Emotion) || 0;
-      if (e !== 1 && sat > 0) {
+      if (st.peevish) { g.Emotion = 0; g.CauseOfPeevish = 0; g.SolutionForPeevish = 0; }
+      else if (e !== 1 && sat > 0) {
         if (sat <= 2 && st.dislikes > 0) g.Emotion = 2;
         else if (e === 2) g.Emotion = sat >= 3 ? 0 : 2;
         else if (e === 3) g.Emotion = sat >= 3 ? 3 : 0;
@@ -452,6 +467,7 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
     const unlock = evalGirlUnlocks(snap, st.girl);
     for (const n of unlock.nodes) if (!patch.includes(n)) patch.push(n);
     const raceUpdate = [...unlock.races].map(([ZoneId, ChangeRace]) => ({ ZoneId, ChangeRace }));
+    const updateGirl = rivalPeevish(snap, st.girl);
     const propChanged = bumpProperty(snap, 'DQUEST_DATE', 1);
     // 퀘스트 사건 4: [횟수, 캐릭터|[FIRSTGIRL], 장소?, 만족도 이상?] (10101 호텔뷔페 42082, 10204 만족도 4 이상 3회)
     questEvent(snap, 4, (p) => (!p[1] || p[1] === '[FIRSTGIRL]' ? Number(snap.UserInfo?.FirstGirl) : Number(p[1])) === st.girl
@@ -462,7 +478,7 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
     return [
       { name: 'MsgScriptProgressAns', body: head },
       { name: 'MsgDateResultAns', body: {
-        Seq: 2, GirlInfo: g, UserInfo: ui, DatePlace: st.place, DateResult: sat, UpdateGirlInfo: [],
+        Seq: 2, GirlInfo: g, UserInfo: ui, DatePlace: st.place, DateResult: sat, UpdateGirlInfo: updateGirl,
         GirlMemorySet: snap.GirlMemorySet, GgraphPatch: { Gnode: patch }, CallScript: [], ...(propChanged ? { PropertySet: snap.PropertySet } : {}),
       } },
       ...(questChanges.length ? [{ name: 'MsgUpdateNquest', body: { Seq: 3, NquestInfo: questChanges } }] : []),
@@ -473,6 +489,35 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
   console.warn(`[date] 처리하지 않은 진행 단계 ${JSON.stringify(body)}`);
   return [{ name: 'MsgScriptProgressAns', body: head }];
 });
+
+// ── 삐침(Emotion 1) 판정: 데이트가 끝날 때 다른 캐릭터들의 조건을 센다 ─────────────────────────
+// 실기록 2026-11-05 통제 실험: 20101(조건 11 '라이벌과 잦은 데이트', 값 10, RivalGirl 20102). 20101 의 마지막 데이트 뒤
+//   20102 와 데이트 10회째(이전 2 + 실험 8) 결과에서 20101 이 기분 1·CauseOfPeevish 11·SolutionForPeevish 11 이 되었고,
+//   그 데이트의 MsgDateResultAns.UpdateGirlInfo 에 20101 레코드 전체가 실렸다. 20101 과 데이트하자 풀림(위 st.peevish).
+//   센 값은 snap.peevishCount[캐릭터][조건] (그 캐릭터와 데이트하면 0). 조건 13('다른 아가씨와 잦은 데이트')은 11 과 같은 방식으로 추정.
+//   그 밖의 조건(1 불만족 데이트, 9 레이스만, 10 데이트만, 12 라이벌 동승 등)은 미확인 — 2026-11-05 실험: 싫어한 답 데이트 5회(조건 1, 값 5)는
+//   삐침이 아니라 화남(2)만 되었다.
+function rivalPeevish(snap: any, dated: number): any[] {
+  const cnt: Record<string, Record<string, number>> = (snap.peevishCount ??= {});
+  cnt[dated] = {};
+  const out: any[] = [];
+  for (const y of snap.MyGirls?.MyGirlInfo ?? []) {
+    const id = Number(y.Girlid);
+    if (id === dated || Number(y.State) !== 7) continue;
+    const def = gdef(id); if (!def) continue;
+    for (const n of [1, 2, 3]) {
+      const cond = Number(def[`PeevishCondition${n}`]) || 0, val = Number(def[`PeevishValue${n}`]) || 0;
+      if (!val || !((cond === 11 && Number(def.RivalGirl) === dated) || cond === 13)) continue;
+      const c = (cnt[id] ??= {});
+      c[cond] = (c[cond] ?? 0) + 1;
+      if (c[cond] >= val && Number(y.Emotion) !== 1) {
+        y.Emotion = 1; y.CauseOfPeevish = cond; y.SolutionForPeevish = cond;
+        if (!out.includes(y)) out.push(y);
+      }
+    }
+  }
+  return out;
+}
 
 // ── 백화점 데이트 (DateType 3) ─────────────────────────────────────────────
 // 실기록 1건(2026-11-01, 20105 친밀도 630 단계 3, 첫 백화점 = 튜토리얼):

@@ -377,7 +377,7 @@ register('MsgWRaceRewardReq', (body, ctx): Msg[] => {
 //   Rank 는 등급(RankTier 1 다이아 ~ 5 브론즈, 클라이언트 WT_diamond..WT_bronze)으로 본다 (추정).
 //   지난 시즌 결과는 실서버 스냅샷 형식 snap.MyWorldTourResult {RankTier, ...} / snap.WorldTourResult {Season} 에서 읽는다.
 //   오프라인에는 월드 투어(대전)가 없어 결과가 생기지 않는다. 결과가 있으면 RankTier(1~5)를 쓰고, 없으면 혼자이므로 1 (추정),
-//   6 이상(미배치)은 Result 2. 시즌 행이 없으면 그 이하 가장 가까운 시즌, 없으면 마지막 시즌 표 (추정).
+//   6 이상(미배치)은 Result 2. 누적 SponsorBonus 의 시즌 말 지급 방식은 미확인(미구현).
 register('MsgWorldTourRewardReq', (body, ctx): Msg[] => {
   const snap = ctx.store.getUser(uid(ctx));
   const fail = (why: string): Msg[] => {
@@ -392,8 +392,10 @@ register('MsgWorldTourRewardReq', (body, ctx): Msg[] => {
   const tier = res.RankTier === undefined ? 1 : Number(res.RankTier);
   if (!(tier >= 1 && tier <= 5)) return fail(`보상 등급 아님 (RankTier ${res.RankTier})`);
   const all: any[] = table('battleTable.json')?.WorldTourReward ?? [];
-  const seasons = [...new Set(all.map((r) => Number(r.Season)))].sort((a, b) => a - b);
-  const use = seasons.filter((s) => s <= season).pop() ?? seasons[seasons.length - 1];
+  // 표 시즌 행 = SeasonId % (표 최대 Season) + 1 (클라이언트 WorldTourRewardListPopup: 2026-11 SeasonId 142 -> 행 29)
+  const maxS = all.reduce((m, r) => Math.max(m, Number(r.Season) || 0), 1);
+  const sid = Number(snap.WorldTourResult?.SeasonId ?? res.SeasonId) || season - 1;
+  const use = (sid % maxS) + 1;
   const rows = all.filter((r) => Number(r.Season) === use && Number(r.Rank) === tier).map((r) => ({ type: Number(r.Reward), amount: Number(r.Amount) }));
   if (!rows.length) return fail('보상 표 없음');
   const reward = giveRewards(snap, rows);

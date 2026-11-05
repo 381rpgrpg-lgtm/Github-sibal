@@ -614,6 +614,18 @@ async function playRace(t) {
   const tp0 = Date.now(), tp = (n) => phases.push(`${n}:${Math.round((Date.now() - tp0) / 1000)}`); const phases = [];
   if (!(await openGame())) { log('hub not reached'); return 'nohub'; }
   tp('hub');
+  if (t.mode === 'worldtour') {
+    // 월드 투어 (2026-11-05 기록): 허브 Challenge(1190,640) -> World Tour 카드(795,450) -> Start Race(1080,662)
+    //   -> MsgBattleMatchReq (상대·트랙) -> 매칭 화면 카운트다운 뒤 자동 MsgBattleStartReq {RaceType 4} -> 대화 -> 주행 -> MsgBattleResultReq
+    //   하루 시도 횟수(LeftTry 7)와 Big Race Ticket 1장씩 사용. 루프에서 LeftTry·티켓을 확인하고 들어온다
+    await page.mouse.click(1190, 640); await sleep(7000);
+    await page.mouse.click(795, 450); await sleep(9000);
+    await evalJ(DRIVER); await evalJ('window.__botSmart = true; window.__botLead = 0; window.__botLeadEnd = 0');
+    tp('map'); await shot('last-panel');
+    lastResult = null; raceStartAt = 0;
+    await page.mouse.click(1080, 662); await sleep(15000);
+    return await finishRace(t, tp, phases);
+  }
   if (t.mode === 'event' || t.mode === 'weekly') {
     await page.mouse.click(1190, 640); await sleep(7000);        // Challenge
     if (t.mode === 'event') { await page.mouse.click(485, 450); await sleep(8000); await page.mouse.click(EVENT_CARD_X[t.card], 450); await sleep(8000); }
@@ -675,7 +687,7 @@ async function finishRace(t, tp, phases) {
   const grades = await evalJ('JSON.stringify(window.__bot && {g: __bot.grades.map(g=>g.g).join(""), min: __bot.grades.map(g=>g.min), boosts: __bot.boosts||0, smart: !!window.__botSmart})').catch(() => null);
   if (!lastResult) { log('no result'); await shot('noresult'); return 'noresult'; }
   const q = lastResult.req, a = lastResult.ans;
-  const rec = { at: new Date().toISOString().slice(5, 16), race: t.mode === 'event' ? `event${t.card}` : t.mode === 'weekly' ? 'weekly' : `${t.zone}-${t.race.RaceIndex}`, id: q.BattleId, win: q.IsPlayerWin, crazy: q.ExcellentCnt,
+  const rec = { at: new Date().toISOString().slice(5, 16), race: t.mode === 'event' ? `event${t.card}` : t.mode === 'weekly' ? 'weekly' : t.mode === 'worldtour' ? 'worldtour' : `${t.zone}-${t.race.RaceIndex}`, id: q.BattleId, win: q.IsPlayerWin, crazy: q.ExcellentCnt,
     great: q.PerfectCnt, good: q.GoodCnt, bad: q.BadCnt, miss: q.MissCnt, ps: q.PerfectStart, nitro: q.NitroUseNum, time: +(q.TimeRecord || 0).toFixed(2),
     opp: +(q.OpponentTimeRecord || 0).toFixed(2), mode: t.mode ?? 'story', result: a?.Result, grade: a?.ClearRec?.Grade, coin: a?.RewardInfo?.Coin, grades };
   tp('result'); rec.phases = phases.join(' ') + ' |' + ogt;
@@ -781,13 +793,23 @@ async function finishRace(t, tp, phases) {
     const wkFile = `${OUT}/weekly.json`, today = new Date().toISOString().slice(0, 10);
     let wk = {}; try { wk = JSON.parse(fs.readFileSync(wkFile, 'utf8')); } catch {}
     if (!questCar && (wk[today] ?? 0) < 3 && Number(ud.UserInfo.FightTicket) > 0) { t = { mode: 'weekly', zone: 0, race: null }; wk[today] = (wk[today] ?? 0) + 1; fs.writeFileSync(wkFile, JSON.stringify(wk)); }
+    // 월드 투어: 무료 시도(MyWorldTour.LeftTry, 하루 7회)가 남아 있으면 탄다 (보상 코인 600·토큰 3·경험치, 시즌 티어 보상).
+    //   남은 횟수는 서버 값만 믿는다 (초기화 시각 미확인). 0 이면 1시간 뒤 다시 확인. 결과 없음 2회면 6시간 쉼 (noRes 'worldtour')
+    //   매칭(MsgBattleMatchReq) 때 Big Race Ticket(FightTicket) 1장을 쓴다 (2026-11-05 기록 29 -> 28 -> 27). 주간 레이스용으로 3장은 남긴다
+    if (!questCar && !fs.existsSync(`${OUT}/NOWT`) && (!t || t.farm) && Number(ud.UserInfo.FightTicket) > 3 && !(noRes.worldtour?.n >= 2 && Date.now() - noRes.worldtour.at < 6 * 3600e3)
+        && Date.now() - (globalThis.__wtNoFree ?? 0) > 3600e3) {
+      const o = pick(await rpc('MsgOpenWorldTourReq', { Cmd: 1 }), 'MsgOpenWorldTourAns');
+      const left = Number(o?.MyWorldTour?.LeftTry ?? -1);
+      if (left > 0) t = { mode: 'worldtour', zone: 0, race: null, farm: false, left };
+      else { globalThis.__wtNoFree = Date.now(); log(`world tour: no free try (LeftTry ${left}, tier ${o?.MyWorldTour?.RankTier}-${o?.MyWorldTour?.RankTierGrade})`); }
+    }
     const fuelNow = fuelOf(ud.UserInfo);
     if (!t) { const busy = stats.actions.filter((a, i) => i >= nAct && !a.includes('familiarity coin')).length;
       log(`no playable race; sleeping ${busy ? '1m' : '30m'}`); await sleep(busy ? 60e3 : 1800e3); continue; }
     const car = ud.Cars.CarInfo.find((c) => c.Carid === ud.UserInfo.Currentcar);
     if (fuelNow < (car?.FuelConsume ?? 25)) { const w = ((car?.FuelConsume ?? 25) - fuelNow) * 15 + 5; log(`fuel ${fuelNow}; sleeping ${w}s`); await sleep(w * 1000); continue; }
     const key = t.race?.RaceId ?? t.mode;
-    log(`${t.mode === 'event' ? 'event' : t.mode === 'weekly' ? 'weekly' : t.farm ? 'farm' : 'target'} ${t.zone}-${t.race?.RaceIndex} (${key})${t.daily ? ' daily' : ''} fuel ${fuelNow} coin ${ud.UserInfo.Coin} cash ${ud.UserInfo.Cash} lv ${ud.UserInfo.Charlevel}`);
+    log(`${t.mode === 'event' ? 'event' : t.mode === 'weekly' ? 'weekly' : t.mode === 'worldtour' ? 'worldtour' : t.farm ? 'farm' : 'target'} ${t.zone}-${t.race?.RaceIndex} (${key})${t.daily ? ' daily' : ''} fuel ${fuelNow} coin ${ud.UserInfo.Coin} cash ${ud.UserInfo.Cash} lv ${ud.UserInfo.Charlevel}`);
     t.smart = (fails[key] ?? 0) >= 2 || fs.existsSync(`${OUT}/SMART`); if (t.smart) log('smart nitro mode');
     let r;
     try { r = await playRace(t); } catch (e) { log('play err ' + e); r = 'err'; }
