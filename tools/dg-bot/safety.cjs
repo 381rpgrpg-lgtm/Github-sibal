@@ -198,18 +198,23 @@ function onResponse(name, body, msgs) {
 }
 
 /** 퀘스트 진척 감시: 같은 목표로 N판 탔는데 값이 그대로면 true (그 목표는 6시간 쉬게 한다) */
+// 경주가 실제로 끝나지 않은 시도(허브 못 감·시작 안 됨 등)는 세지 않는다: 봇이 경주 뒤 progressUndo() 로 이번 판의 증가를 되돌린다
+//   (2026-11-05: CPU 경합으로 '허브 못 감' 6번이 '진척 없음 6판' 오경보가 되어 10205 동승 목표를 6시간 쉼)
+let pendingTicks = [];
 function progressTick(key, value, limit = 6) {
   const j = readJ('progress.json', {});
   const e = j[key] ?? { val: value, races: 0 };
   if (e.skipUntil && Date.now() < e.skipUntil) return true;
   if (e.val !== value) { e.val = value; e.races = 0; delete e.skipUntil; }
-  e.races++;
+  e.races++; pendingTicks.push(key);
   let stuck = false;
   if (e.races > limit) { e.skipUntil = Date.now() + 6 * 3600e3; e.races = 0; stuck = true; alert(`ANOMALY no progress: ${key} stayed ${value} for ${limit} races -> skip 6h`); }
   j[key] = e; writeJ('progress.json', j);
   return stuck;
 }
+function progressUndo() { const j = readJ('progress.json', {}); for (const k of pendingTicks) if (j[k]?.races > 0) j[k].races--; pendingTicks = []; writeJ('progress.json', j); }
+function progressCommit() { pendingTicks = []; }
 function progressSkipped(key) { const e = readJ('progress.json', {})[key]; return !!(e?.skipUntil && Date.now() < e.skipUntil); }
 function allowCombine(ids) { allowCombineIds = new Set(ids.map(Number)); }
 
-module.exports = { init, beforeSend, onResponse, computeProtect, progressTick, progressSkipped, allowCombine, carGrade, get protect() { return protectCache; } };
+module.exports = { init, beforeSend, onResponse, computeProtect, progressTick, progressSkipped, progressUndo, progressCommit, allowCombine, carGrade, get protect() { return protectCache; } };

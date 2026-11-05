@@ -766,7 +766,7 @@ async function finishRace(t, tp, phases) {
     if (fs.existsSync(`${OUT}/STOP`)) { log('STOP file'); break; }
     if (fs.existsSync(`${OUT}/RELOAD`)) { fs.unlinkSync(`${OUT}/RELOAD`); log('RELOAD'); break; }
     if (fs.existsSync(`${OUT}/PAUSE`)) { if (!globalThis.__paused) log('PAUSE'); globalThis.__paused = 1; await sleep(5000); continue; } globalThis.__paused = 0;
-    let ud; const nAct = stats.actions.length;
+    let ud; const nAct = stats.actions.length; SAFE.progressCommit();
     try { ud = await manage(); } catch (e) { log('manage err ' + e); await sleep(60000); continue; }
     if (!ud) { await sleep(120000); continue; }
     globalThis.__ud = ud; // eventRace() 의 참가 조건 확인용
@@ -882,6 +882,7 @@ async function finishRace(t, tp, phases) {
     t.smart = (fails[key] ?? 0) >= 2 || fs.existsSync(`${OUT}/SMART`); if (t.smart) log('smart nitro mode');
     let r;
     try { r = await playRace(t); } catch (e) { log('play err ' + e); r = 'err'; }
+    if (r !== 'win' && r !== 'lose') SAFE.progressUndo(); // 끝나지 않은 시도는 진척 감시에서 빼기
     if (r === 'lose' && !t.farm) fails[key] = (fails[key] ?? 0) + 1;
     if (r === 'win' && !t.farm) fails[key] = 0; saveFails();
     if (r === 'noresult' && t.mode === 'event') fs.writeFileSync(`${OUT}/EVENTBLOCK`, new Date().toISOString());
