@@ -926,8 +926,11 @@ async function finishRace(t, tp, phases) {
     // 성능 조합 (perf.mjs = 오프라인 서버 finalAttr, 실기록과 일치): 퀘스트 동승·해금 동승이 없으면 현재 차에 가장 센 동승자.
     //   월드 투어·한 번 이상 진 본편은 가장 센 차+동승자 (2026-11-05: ★5 Lv1 + 퀘스트 끝난 동승자 1799 vs ★4 + 서아 2572, 8-20 보스 연패)
     try {
-      const needGirl = rideObj && !questCar && !SAFE.progressSkipped(`ride:${rideObj.Id}:${rideObj.ObjId}`) ? Number(rideObj.Param[4]) : (unlockGirl || 0);
       const hard = t.mode === 'worldtour' || (!t.farm && !t.quest && !t.mode && (fails[key] ?? 0) >= 1);
+      // 어려운 경주에서는 해금용 호감도 동승(unlockGirl)보다 승리가 우선 (2026-11-05: 9-16 을 지아 동승 1770 으로 0.16초 차 3연패, 최고 조합 2606).
+      //   퀘스트가 요구하는 동승(rideObj)은 그대로 지킨다
+      const rideGirl = t.quest && rideObj && !questCar && !SAFE.progressSkipped(`ride:${rideObj.Id}:${rideObj.ObjId}`) ? Number(rideObj.Param[4]) : 0;
+      const needGirl = rideGirl || (hard ? 0 : (rideObj ? Number(rideObj.Param[4]) : (unlockGirl || 0)));
       if (hard || !needGirl) {
         fs.writeFileSync(`${OUT}/ud-perf.json`, JSON.stringify(ud));
         const pr = JSON.parse(require('child_process').execFileSync('node', [__dirname + '/perf.mjs', `${OUT}/ud-perf.json`, '200'], { encoding: 'utf8', timeout: 60000 }));
