@@ -360,6 +360,8 @@ async function manage() {
       const places = (ud.DateZone?.Place ?? []).filter((p) => p.State === 1 && p.Placeid >= 41011 && p.Placeid <= 44244 && Number(PL.find((x) => x.Id === p.Placeid)?.Price) > 0).map((p) => p.Placeid);
       const hf = `${OUT}/dateplaces.json`; let hist = {}; try { hist = JSON.parse(fs.readFileSync(hf, 'utf8')); } catch {}
       const want = new Map();
+      // 삐친 캐릭터(Emotion 1)는 데이트 한 번으로 풀린다 (실기록 2026-11-05: 20101·20303). 삐침은 동승 효과를 끄므로(20303 은 +616) 먼저 데이트
+      for (const x of ud.MyGirls?.MyGirlInfo ?? []) if (x.State === 7 && Number(x.Emotion) === 1) want.set(x.Girlid, { q: 'peevish', place: 0 });
       for (const q of ud.NquestInfos?.NquestInfo ?? []) if (q.State === 3) for (const o of QUESTS.find((x) => x.Id === q.QuestId)?.Objective ?? []) {
         const cur = q.Objective?.find((x) => x.ObjId === o.ObjId)?.CurrentValue ?? 0;
         if (cur >= Number(o.Param[0] || 1)) continue;
