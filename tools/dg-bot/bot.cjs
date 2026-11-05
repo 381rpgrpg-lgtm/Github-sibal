@@ -451,6 +451,25 @@ async function manage() {
       }
     }
   } catch (e) { log('upgrade err ' + e); }
+  // 현재 차량 빈 부품 칸 채우기 (2026-11-05: ★5 NSR+ 로 바꾼 뒤 칸이 비어 있었다): 장착 안 된 부품 중 능력치 합이 큰 것,
+  //   그 차에 이미 단 분류(Category)는 제외 (한 차에 분류당 1개). MsgEquipPartsReq {Itemid, Equipindex, Equipcarid} -> MsgChangeParts
+  try {
+    const u3 = pick(await rpc('MsgLoginReq'), 'MsgUserData');
+    const PT = new Map(JSON.parse(fs.readFileSync('/home/user/Github-sibal/offline-server/data/tables/parts.json', 'utf8')).Part.map((p) => [p.Id, p]));
+    const carId = u3.UserInfo.Currentcar, car = u3.Cars.CarInfo.find((c) => c.Carid === carId);
+    const items = (u3.Items?.ItemInfo ?? []).filter((i) => PT.has(i.Itemtype));
+    const eq = items.filter((i) => i.Equipcarid === carId);
+    const used = new Set(eq.map((i) => i.Equipindex)), cats = new Set(eq.map((i) => PT.get(i.Itemtype).Category));
+    const sum = (i) => Object.values(i.Attributes ?? PT.get(i.Itemtype).Attributes ?? {}).reduce((a, b) => a + Number(b || 0), 0);
+    for (let k = 1; car && k <= (Number(car.SlotNum) || 1); k++) {
+      if (used.has(k)) continue;
+      const it = items.filter((i) => !(i.Equipcarid > 0) && !cats.has(PT.get(i.Itemtype).Category)).sort((a, b) => sum(b) - sum(a))[0];
+      if (!it) break;
+      const a = await rpc('MsgEquipPartsReq', { Itemid: it.Itemid, Equipindex: k, Equipcarid: carId });
+      act(`equip part ${it.Itemtype} (sum ${sum(it)}) -> car ${carId} slot ${k}: ${a.map((m) => m.name + ':' + (m.body?.Result ?? '')).join(',')}`);
+      it.Equipcarid = carId; cats.add(PT.get(it.Itemtype).Category);
+    }
+  } catch (e) { log('equip err ' + e); }
   return pick(await rpc('MsgLoginReq'), 'MsgUserData');
 }
 
@@ -730,6 +749,18 @@ async function finishRace(t, tp, phases) {
     try { ud = await manage(); } catch (e) { log('manage err ' + e); await sleep(60000); continue; }
     if (!ud) { await sleep(120000); continue; }
     globalThis.__ud = ud; // eventRace() 의 참가 조건 확인용
+    // 기분 변화 기록 (삐침 조건 수집): 히로인별 Emotion·CauseOfPeevish 가 바뀌면 run/samples-mood.jsonl 에 (현재 동승자·직전 활동 포함)
+    try {
+      const mf = `${OUT}/mood.json`; const prev = fs.existsSync(mf) ? JSON.parse(fs.readFileSync(mf, 'utf8')) : {};
+      const now = {};
+      for (const g of ud.MyGirls?.MyGirlInfo ?? []) if (g.State === 7) now[g.Girlid] = [Number(g.Emotion) || 0, Number(g.CauseOfPeevish) || 0, Number(g.NthDate) || 0, Number(g.Familiarity) || 0];
+      for (const [id, v] of Object.entries(now)) { const o = prev[id];
+        if (o && (o[0] !== v[0] || o[1] !== v[1])) {
+          fs.appendFileSync(`${OUT}/samples-mood.jsonl`, JSON.stringify({ at: new Date().toISOString(), girl: Number(id), from: o, to: v, passenger: ud.UserInfo.PassengerGirl, lastRace: stats.races.at(-1)?.race, recent: stats.actions.slice(-5) }) + '\n');
+          log(`MOOD ${id}: emotion ${o[0]}->${v[0]} cause ${o[1]}->${v[1]}`);
+        } }
+      fs.writeFileSync(mf, JSON.stringify(now));
+    } catch (e) { log('mood err ' + e); }
     globalThis.__noResSkip = noResSkip();
     // 한계 돌파 퀘스트 모드
     if (expandQuestActive(ud)) {
