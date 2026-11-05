@@ -3,21 +3,27 @@
 //   -> 클라이언트 {t:'auth', token, sig = HMAC(세션 sigKey, "ws\n"+nonce)} -> 서버 {t:'welcome', ...} 뒤로 queue·room·race 등 JSON 메시지.
 // 기록 모드(DG_RECORD=1): 실서버 /api/pvp 로 그대로 중계하고, 클라이언트의 auth 만 실서버 세션 토큰·서명으로 바꿔 끼운다.
 //   모든 프레임을 data/recorded-ws/<시각>_pvp.jsonl 에 남긴다 (오프라인 대전 서버 구현의 근거).
-// 오프라인 모드: 아직 로컬 대전 서버가 없어 연결을 닫는다 (클라이언트는 'Duels need the online server.').
+// 오프라인 모드(실서버 없음): 로컬 대전 서버(src/pvplocal.ts)가 직접 처리한다. 상대는 봇(같은 서버에 접속한 다른 계정이면 사람끼리).
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { mkdirSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
 import type { Upstream } from './upstream.js';
+import { serveLocalPvp, type PvpLocalDeps } from './pvplocal.js';
 
 const REC_DIR = new URL('../data/recorded-ws/', import.meta.url).pathname;
 const wss = new WebSocketServer({ noServer: true });
 
-export function handlePvpUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer, upstream: Upstream | null): boolean {
+export function handlePvpUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer, upstream: Upstream | null, local?: PvpLocalDeps): boolean {
   const path = new URL(req.url ?? '/', 'http://x').pathname;
   if (path !== '/api/pvp') return false;
-  if (!upstream) { socket.destroy(); return true; }
+  if (!upstream) {
+    // 오프라인: 로컬 대전 서버 (local 이 없으면 예전처럼 닫는다)
+    if (!local) { socket.destroy(); return true; }
+    wss.handleUpgrade(req, socket, head, (client) => serveLocalPvp(client, local));
+    return true;
+  }
   wss.handleUpgrade(req, socket, head, (client) => relay(client, upstream));
   return true;
 }

@@ -626,6 +626,7 @@ async function playRace(t) {
     for (let k = 0; k < 3 && !opened; k++) {
       if (k) { for (let j = 0; j < 3; j++) { await page.mouse.click(60, 25); await sleep(3000); } }
       reqSeen.length = 0;
+      await page.mouse.click(460, 610); await sleep(2500); // 허브의 '새 거리 단어' 팝업 OK (2026-11-05: 월드 투어 브론즈 단어 팝업이 클릭을 가로챔)
       await page.mouse.click(1190, 640); await sleep(7000);
       await page.mouse.click(795, 450); await sleep(9000);
       opened = reqSeen.includes('MsgOpenWorldTourReq');
@@ -641,6 +642,7 @@ async function playRace(t) {
     return await finishRace(t, tp, phases);
   }
   if (t.mode === 'event' || t.mode === 'weekly') {
+    await page.mouse.click(460, 610); await sleep(2500);         // '새 거리 단어' 팝업 OK (없으면 빈 곳)
     await page.mouse.click(1190, 640); await sleep(7000);        // Challenge
     if (t.mode === 'event') { await page.mouse.click(485, 450); await sleep(8000); await page.mouse.click(EVENT_CARD_X[t.card], 450); await sleep(8000); }
     else { await page.mouse.click(175, 450); await sleep(8000); await page.mouse.click(1040, 665); await sleep(5000); await page.mouse.click(1040, 388); await sleep(2500); await page.mouse.click(818, 502); await sleep(2500); } // 현재 설정 가져오기 확인 창
@@ -682,7 +684,7 @@ async function playRace(t) {
 }
 async function finishRace(t, tp, phases) {
   // 시작 전 대화 넘기기
-  for (let i = 0; i < 25; i++) {
+  for (let i = 0; i < 60; i++) {
     const st = await evalJ('JSON.stringify(globalThis.__dgRace ? {s: __dgRace.raceState, c: __dgRace.countdown} : null)').then(JSON.parse).catch(() => null);
     if (st && (st.s >= 2 || st.c !== null)) break;
     await page.mouse.click(1240, 672); await sleep(3000);
@@ -690,7 +692,8 @@ async function finishRace(t, tp, phases) {
   // 레이스 끝까지 (최대 12분). 주행이 시작되면 엔진을 고정 간격(0.02초)으로 바로 진행한다 (화면 그리기와 무관, 기록 동일: 오프라인 검증 43.19 = 43.19)
   const ff = !fs.existsSync(`${OUT}/NOFF`);
   for (let i = 0; i < 1440 && !lastResult; i++) {
-    if (!raceStartAt && i >= 240) { log('race did not start in 120s'); break; }
+    // 시작 대기 240초: 할로윈 보스(3103-20 The Yurei)는 로딩만 약 130초 (2026-11-05 확인, 120초 제한으로 '시작 안 됨' 3회)
+    if (!raceStartAt && i >= 480) { log('race did not start in 240s'); break; }
     if (!raceStartAt) {
       const st = await evalJ('globalThis.__dgRace ? __dgRace.raceState : -1').catch(() => -1);
       if (st === 2) { raceStartAt = Date.now(); tp('go');

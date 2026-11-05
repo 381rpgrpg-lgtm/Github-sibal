@@ -288,8 +288,8 @@ const server = createServer(async (req, res) => {
   }
 });
 
-// 실시간 대전 웹소켓 (/api/pvp): 기록 모드에서는 실서버로 중계 (src/pvprelay.ts)
-server.on('upgrade', (req, socket, head) => { if (!handlePvpUpgrade(req, socket, head, upstream)) socket.destroy(); });
+// 실시간 대전 웹소켓 (/api/pvp): 기록 모드에서는 실서버로 중계, 오프라인은 로컬 대전 서버 (src/pvprelay.ts, src/pvplocal.ts)
+server.on('upgrade', (req, socket, head) => { if (!handlePvpUpgrade(req, socket, head, upstream, { auth, store, strict: !!cfg.strictSignatures })) socket.destroy(); });
 
 server.listen(cfg.port, () => {
   console.log(`offline-server listening on http://localhost:${cfg.port}`);
