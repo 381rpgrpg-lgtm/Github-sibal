@@ -635,7 +635,8 @@ async function openGame() {
   mark('input');
   const ins = await page.$$('input');
   await ins[0].fill('damissi'); await ins[1].fill('offline'); await ins[1].press('Enter');
-  for (let i = 0; i < 120 && !hubSeen; i++) await sleep(2000);
+  // 허브 대기 420초: 소프트웨어 렌더링(1~2fps)에서 로그인 -> 허브가 260초 안팎 걸린다 (2026-11-05 10:07 'hub:263'). 240초 제한이면 가끔 '허브 못 감'
+  for (let i = 0; i < 210 && !hubSeen; i++) await sleep(2000);
   mark('hub');
   await sleep(8000);
   for (let i = 0; i < 3; i++) { await page.mouse.click(1240, 103); await sleep(2500); }
