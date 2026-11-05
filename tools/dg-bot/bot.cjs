@@ -912,7 +912,14 @@ async function finishRace(t, tp, phases) {
     if (!t) { const busy = stats.actions.filter((a, i) => i >= nAct && !a.includes('familiarity coin')).length;
       log(`no playable race; sleeping ${busy ? '1m' : '30m'}`); await sleep(busy ? 60e3 : 1800e3); continue; }
     const car = ud.Cars.CarInfo.find((c) => c.Carid === ud.UserInfo.Currentcar);
-    if (fuelNow < (car?.FuelConsume ?? 25)) { const w = ((car?.FuelConsume ?? 25) - fuelNow) * 15 + 5; log(`fuel ${fuelNow}; sleeping ${w}s`); await sleep(w * 1000); continue; }
+    if (fuelNow < (car?.FuelConsume ?? 25)) {
+      // 보상으로 받은 연료 아이템(Category 605, 예 60043 +150)이 있으면 기다리지 않고 쓴다 (구매 없음)
+      try {
+        const T = await itemTables();
+        const fx = (ud.Items?.ItemInfo ?? []).find((x) => (T.item.get(x.Itemtype)?.Category ?? 0) === 605 && Number(x.StackNum ?? x.Count) > 0);
+        if (fx) { const a = pick(await rpc('MsgUseItemReq', { Item: { Itemid: fx.Itemid } }), 'MsgUseItemAns'); act(`fuel item ${fx.Itemtype}: Result ${a?.Result} fuel ${a?.UserInfo?.Fuelvalue}`); if (a?.Result === 1) continue; }
+      } catch (e) { log('fuel item err ' + e); }
+      const w = ((car?.FuelConsume ?? 25) - fuelNow) * 15 + 5; log(`fuel ${fuelNow}; sleeping ${w}s`); await sleep(w * 1000); continue; }
     const key = t.race?.RaceId ?? t.mode;
     log(`${t.mode === 'event' ? 'event' : t.mode === 'weekly' ? 'weekly' : t.mode === 'worldtour' ? 'worldtour' : t.farm ? 'farm' : 'target'} ${t.zone}-${t.race?.RaceIndex} (${key})${t.daily ? ' daily' : ''} fuel ${fuelNow} coin ${ud.UserInfo.Coin} cash ${ud.UserInfo.Cash} lv ${ud.UserInfo.Charlevel}`);
     t.smart = (fails[key] ?? 0) >= 2 || fs.existsSync(`${OUT}/SMART`); if (t.smart) log('smart nitro mode');
