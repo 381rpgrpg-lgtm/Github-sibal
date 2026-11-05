@@ -8,6 +8,5 @@ if ! curl -s localhost:8080/api/version >/dev/null; then
   DG_RECORD=1 DG_RECORD_ALWAYS='*' DG_LOGIN=damissi DG_PASSWORD="$PW" nohup node --no-warnings dist/index.js >> $S/relay.log 2>&1 &
   sleep 3
 fi
-find data/recorded -maxdepth 1 \( -name '*LocalRebornBoard*' -o -name '*MsgGetWRaceInfo*' \) -delete 2>/dev/null
 pgrep -f "run.s[h]" >/dev/null || setsid nohup $S/bot/run.sh >/dev/null 2>&1 < /dev/null &
 pgrep -f "keepalive.s[h]" >/dev/null || setsid nohup $S/bot/keepalive.sh >/dev/null 2>&1 < /dev/null &

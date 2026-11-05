@@ -14,7 +14,7 @@
 //   204 차량 강화 +1   205 강화 UpgradeSuccess +1   208 부품 강화(조합) +1
 //   302 데이트 결과(DateResult) 가 Value2 인 데이트 +1   303 연락처 수(열린 캐릭터 - 첫 캐릭터)   304 CG 수(추정: 기록상 히로인 수와 같이 증가)
 //   309 히로인 의상(GirlItems) 수   403 일일 미션 보상 수령 +1   401 플레이어 레벨   402 획득 코인 누계 (응답 전후 코인 증가분; 소비와 같은 요청이면 순증가만)
-// 미구현(진행 없음): 109 주간 레이스 아이템, 110 월드 투어, 113, 206 차량 조합, 207, 209, 301, 305, 306, 308, 404~407.
+// 미구현(진행 없음): 109 주간 레이스 아이템, 110 월드 투어, 113, 207, 209, 301, 305, 306, 308, 404~407.
 import { table, carDefOf } from './gamecalc.js';
 
 type Ach = { Index: number; Condition: number; Value1?: number; Value2?: number; RewardIndex?: number; RewardValue?: number };
@@ -80,6 +80,8 @@ export function achAfter(snap: any, before: AchBefore, name: string, req: any, m
     if (messages[0]?.body?.UpgradeSuccess) apply(snap, 205, (p) => p + 1, changed);
   }
   if (name === 'MsgCombinePartsReq' && ok) apply(snap, 208, (p) => p + 1, changed);
+  // 206 차량 조합 횟수 (실기록 2026-11-05 조합 응답: 업적 2501 Count 1 State 2, 2502~2505 Count 1)
+  if (name === 'MsgCombineCarReq' && ok) apply(snap, 206, (p) => p + 1, changed);
   // 403 일일 미션 완료: 보상 수령 응답에 RewardInfo 가 있을 때 +1 (실기록 2026-11-02: 3 -> 4 단계 레코드 4201~4204 Count 3)
   if (name === 'MsgGetDailyQuestRewardReq' && messages[0]?.body?.RewardInfo) apply(snap, 403, (p) => p + 1, changed);
   for (const m of messages) {

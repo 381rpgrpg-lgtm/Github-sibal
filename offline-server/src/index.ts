@@ -1,4 +1,4 @@
-// 로컬 권위 서버 진입점. HTTP 라우팅만 (WebSocket /api/pvp 는 실시간 단계에서 추가).
+// 로컬 권위 서버 진입점. HTTP 라우팅 + WebSocket /api/pvp (기록 모드 중계, src/pvprelay.ts).
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFileSync, existsSync, createReadStream, statSync, mkdirSync, writeFileSync, appendFileSync } from 'node:fs';
 import { join, normalize } from 'node:path';
@@ -8,6 +8,7 @@ import { loadGameData } from './content.js';
 import { dispatch, type Ctx } from './rpc.js';
 import { Upstream } from './upstream.js';
 import { buildPatchedClient } from './clientpatch.js';
+import { handlePvpUpgrade } from './pvprelay.js';
 import './handlers/boot.js';
 import './handlers/main.js';
 import './handlers/mail.js';
@@ -264,6 +265,14 @@ const server = createServer(async (req, res) => {
       return reply(200, result);
     }
 
+    // 실시간 대전(Live Duel): 클라이언트 PvpClient 가 transport.call('api/pvp/ticket') 로 {ticket, wsUrl} 을 받아
+    //   그 wsUrl 에 ticket 으로 접속한다 (클라이언트 코드 #open/#socket). 기록 모드에서는 실서버로 그대로 넘기고 저장한다.
+    //   오프라인 모드의 로컬 대전 서버는 아직 없다 (404 -> 클라이언트는 'Connecting...' 에 머문다).
+    if (path.startsWith('/api/pvp/') && method === 'POST' && upstream) {
+      const r = await upstream.call(path, JSON.parse(body || '{}'));
+      return reply(r.status, r.json);
+    }
+
     // 공지/뉴스: 오프라인에서는 비어 있음 (형식은 실서버 응답과 동일, build 필드는 넣지 않음)
     const now = Date.now() / 1000;
     if (path === '/api/notices/active' && method === 'GET') return reply(200, { notices: [], special: null, time: now });
@@ -276,6 +285,9 @@ const server = createServer(async (req, res) => {
     return json(res, 500, { error: String((e as Error).message) });
   }
 });
+
+// 실시간 대전 웹소켓 (/api/pvp): 기록 모드에서는 실서버로 중계 (src/pvprelay.ts)
+server.on('upgrade', (req, socket, head) => { if (!handlePvpUpgrade(req, socket, head, upstream)) socket.destroy(); });
 
 server.listen(cfg.port, () => {
   console.log(`offline-server listening on http://localhost:${cfg.port}`);

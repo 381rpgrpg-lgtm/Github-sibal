@@ -18,9 +18,11 @@ export function carLevelRow(grade: number, level: number) {
   init();
   return levels!.find((g: any) => Number(g.Grade) === grade)?.CarLevel?.find((l: any) => Number(l.Level) === level) ?? null;
 }
-// 대상 등급별 경험치 1당 코인. 실측: ★1 8, ★2 32.5. 그 위는 같은 비율(4.0625배)로 추정.
-const COST_PER_EXP: Record<number, number> = { 1: 8, 2: 32.5 };
-const costPerExp = (g: number) => COST_PER_EXP[g] ?? 32.5 * 4.0625 ** (g - 2);
+// 대상 등급별 경험치 1당 코인. 실측: ★1 8, ★2 32.5, ★3 50.25 (2026-11-05 10203 강화 8건: 20 -> 1005, 10 -> 502, 120 -> 6030),
+//   ★4 72.1 (10604 강화: 20 -> 1442, 60 -> 4327). 그 위는 ★3->★4 비율(1.435배)로 추정.
+//   (예전 추정식 32.5 x 4.0625^(g-2) 는 ★4 를 536 으로 계산해 크게 틀렸다)
+const COST_PER_EXP: Record<number, number> = { 1: 8, 2: 32.5, 3: 50.25, 4: 72.1 };
+const costPerExp = (g: number) => COST_PER_EXP[g] ?? 72.1 * 1.435 ** (g - 4);
 const ATTRS = ['AttribMaxSpd', 'AttribAcc', 'AttribStability', 'AttribDrift'];
 
 export function upgradePreview(snap: any, car: any, sources: any[]):

@@ -3,7 +3,8 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { wraceSet, myRank } from './weekly.js';
 import { register, type Msg } from '../rpc.js';
-import { table, partDef, carDefOf, ATTRS } from '../gamecalc.js';
+import { table, partDef, carDefOf, ATTRS, newOwnedCar } from '../gamecalc.js';
+import { refreshQuests } from '../quests.js';
 import { grantItem } from '../inventory.js';
 import { bumpProperty } from './battle.js';
 import { questEvent } from '../quests.js';
@@ -144,6 +145,46 @@ register('MsgDisassembleCarReq', (body, ctx): Msg[] => {
   return [{ name: 'MsgDisassembleCarAns', body: { Seq: 1, Result: 1, RemovedCarID: gone.map((c: any) => c.Carid), ItemInfo: [],
     RewardInfo: { Coin: 0, Charexp: 0, Cash: 0, Familiartity: 0, CarInfo: [],
       ItemInfo: [{ Itemid: core?.Itemid, Itemtype: 61006, Count: cores, StackNum: core?.Count, DeltaNum: cores }] } } }];
+});
+
+// ── 차량 조합 MsgCombineCarReq {TargetCarID, SourceCarID}
+//   실기록 2026-11-05 (10602 ★2 Lv10 숙련 91/135·한계 돌파 + 10702 ★2 Lv10 72/135·한계 돌파 -> 10403 ★3 Lv1):
+//     {Seq, Result 1, RemovedCarID [대상, 재료], RemovedPartID [두 차에 장착된 부품 Itemid], ResultCarInfo (새 Carid, Lv1, 숙련도 0,
+//      MasteryCapacity = 새 차종 SoftLimit)} + 업적 알림 + MsgUpdateNquest (10505 '조합으로 ★3' -> State 6).
+//   조건(클라이언트 문구 car_combine_fail_lowmastery 등): 같은 등급, 둘 다 Lv10, 숙련도 최대이거나 숙련도 한계 돌파, 잠금 불가.
+//   결과(게임 안내 lose_tip6_desc1·combination_popup): 같은 차종이면 한 등급 위 같은 모델(숙련도 유지), 다른 차종이면 한 등급 위 무작위.
+//   추정: 무작위는 그 등급 Distribute>0 차량 균등 (기록 1건), 현재 차량은 재료·대상 불가, 장착 부품은 함께 사라짐(RemovedPartID).
+register('MsgCombineCarReq', (body, ctx): Msg[] => {
+  const snap = ctx.store.getUser(ctx.session.accountId);
+  const fail = (why: string): Msg[] => { console.warn(`[garage] 조합 거절: ${why}`); return [{ name: 'MsgCombineCarAns', body: { Seq: 1, Result: 2 } }]; };
+  if (!snap) return fail('계정 없음');
+  const t = findCar(snap, Number(body?.TargetCarID)), s = findCar(snap, Number(body?.SourceCarID));
+  if (!t || !s || t === s) return fail('차량 없음');
+  const g = (c: any) => Number(c.Grade) || Number(carDefOf(c.Cartype)?.Grade) || 1;
+  const ready = (c: any) => Number(c.UpgradeLevel) >= 10 && (Number(c.Mastery) >= Number(c.MasteryCapacity) || Number(c.ExpansionLevel) > 0);
+  if (g(t) !== g(s)) return fail('등급 다름');
+  if (!ready(t) || !ready(s)) return fail('Lv10·숙련도 조건');
+  if (t.IsLocked || s.IsLocked) return fail('잠금 차량');
+  const cur = Number(snap.UserInfo?.Currentcar);
+  if (Number(t.Carid) === cur || Number(s.Carid) === cur) return fail('현재 차량');
+  const td = carDefOf(t.Cartype) ?? {}, sd = carDefOf(s.Cartype) ?? {};
+  const all = [...(table('cars.json')?.Car ?? [])];
+  const next = g(t) + 1;
+  const same = td.ModelHigh && td.ModelHigh === sd.ModelHigh ? all.find((c: any) => c.ModelHigh === td.ModelHigh && Number(c.Grade) === next) : null;
+  const pool = all.filter((c: any) => Number(c.Grade) === next && Number(c.Distribute) > 0);
+  const def = same ?? pool[Math.floor(Math.random() * pool.length)];
+  if (!def) return fail(`${next}성 차량 없음`);
+  const removedParts = items(snap).filter((it) => [Number(t.Carid), Number(s.Carid)].includes(Number(it.Equipcarid))).map((it) => Number(it.Itemid));
+  snap.Items.ItemInfo = items(snap).filter((it) => !removedParts.includes(Number(it.Itemid)));
+  snap.Cars.CarInfo = cars(snap).filter((c) => c !== t && c !== s);
+  const car = newOwnedCar(snap, Number(def.Id));
+  if (same) car.Mastery = Math.min(Number(t.Mastery) || 0, Number(car.MasteryCapacity) || 0); // 같은 차종: 숙련도 유지 (안내 문구)
+  snap.Cars.CarInfo.push(car);
+  questEvent(snap, 19, (p) => next >= Number(p[1] || 1));
+  const changes = refreshQuests(snap);
+  ctx.store.putUser(ctx.session.accountId, snap);
+  return [{ name: 'MsgCombineCarAns', body: { Seq: 1, Result: 1, RemovedCarID: [Number(t.Carid), Number(s.Carid)], RemovedPartID: removedParts, ResultCarInfo: car } },
+    ...(changes.length ? [{ name: 'MsgUpdateNquest', body: { Seq: 2, NquestInfo: changes } }] : [])];
 });
 
 // ── 꾸미기 도감 MsgCosmeticCollectionReq -> {Result 1, Ids:[도감에 보이는 것], Exchange:[교환 가능]}

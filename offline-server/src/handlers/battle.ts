@@ -71,8 +71,14 @@ export function fuelNow(ui: any): number {
   const left = (Number(ui.Fueltime) || 0) - now();
   return left > 0 ? Math.max(max - Math.ceil(left / FUEL_FILL_SEC), 0) : max;
 }
+// 보너스 연료(UserInfo.Fuelbonus, 최대치를 넘는 연료: 연료 상자를 가득 찬 상태에서 쓰면 쌓인다)를 먼저 쓴다.
+//   실기록 2026-11-05: 보너스 215 -> 180 -> 145 -> 110 -> 75 (레이스마다 FuelConsume 35), 그동안 Fuelvalue·Fueltime 그대로.
 function spendFuel(ui: any, amount: number) {
-  ui.Fueltime = Math.max(Number(ui.Fueltime) || 0, now()) + amount * FUEL_FILL_SEC;
+  const bonus = Math.max(0, Number(ui.Fuelbonus) || 0);
+  const fromBonus = Math.min(bonus, amount);
+  if (fromBonus > 0) ui.Fuelbonus = bonus - fromBonus;
+  const rest = amount - fromBonus;
+  if (rest > 0) ui.Fueltime = Math.max(Number(ui.Fueltime) || 0, now()) + rest * FUEL_FILL_SEC;
 }
 
 /** PropertySet.Property[] 의 Nvalue 증가 (일일 미션 카운터). vconstTable <이름>_MAX 가 있으면 그 값에서 멈춘다
@@ -155,7 +161,7 @@ register('MsgBattleStartReq', (body, ctx: Ctx): Msg[] => {
   const ev = isEventZone(body?.ZoneId);
   if (ev) { const fail = eventStart(snap, zone, race, car); if (fail) return fail; } // 이벤트: 연료 대신 입장권 (event.ts)
   else if (!ctx.cheat.enabled || !ctx.cheat.infiniteFuel) {
-    if (fuelNow(ui) < cost) return [{ name: 'MsgBattleStartAns', body: { Seq: 1, Result: 0, UserInfo: ui } }];
+    if (fuelNow(ui) + Math.max(0, Number(ui.Fuelbonus) || 0) < cost) return [{ name: 'MsgBattleStartAns', body: { Seq: 1, Result: 0, UserInfo: ui } }];
     spendFuel(ui, cost);
   }
   if (Number(ui.Completion) & TUT_FIRST_SELECT) ui.Completion = Number(ui.Completion) | TUT_INFO_FIRST_GIRL;

@@ -75,6 +75,38 @@ export class Upstream {
     return json;
   }
 
+  /** 실시간 대전 웹소켓 인증 (클라이언트 PvpClient #socket/#sign): hello.nonce 에 대해 {t:'auth', token, sig = HMAC(sigKey, "ws\n"+nonce)} */
+  async wsAuth(nonce: string): Promise<{ t: 'auth'; token: string; sig: string }> {
+    await this.ensure();
+    const sig = b64url(createHmac('sha256', b64urlDec(this.session.sigKey)).update('ws\n' + nonce).digest());
+    return { t: 'auth', token: this.session.token, sig };
+  }
+  get base_(): string { return this.base; }
+
+  /** 서명된 일반 POST (RPC 외 경로, 예 'api/pvp/ticket'). 서명 형식은 rpc() 와 같다: METHOD\npath\nnonce\nsha256(body) */
+  async call(path: string, body: any): Promise<{ status: number; json: any }> {
+    await this.ensure();
+    const p = path.startsWith('/') ? path : '/' + path;
+    const bodystr = JSON.stringify(body ?? {});
+    this.counter = Math.max(this.counter + 1, Date.now() * 1000);
+    const nonce = String(this.counter);
+    const msg = `POST\n${p}\n${nonce}\n${createHash('sha256').update(bodystr).digest('hex')}`;
+    const sig = b64url(createHmac('sha256', b64urlDec(this.session.sigKey)).update(msg).digest());
+    const r = await fetch(this.base + p, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json', 'x-dg-build': this.session.build, 'user-agent': UA,
+        authorization: 'Bearer ' + this.session.token, 'x-dg-c': nonce, 'x-dg-s': sig,
+      },
+      body: bodystr,
+    });
+    const text = await r.text();
+    let json: any = null;
+    try { json = JSON.parse(text); } catch { json = { raw: text }; }
+    this.save(p.replace(/^\//, '').replace(/\//g, '_'), body, r.status, json);
+    return { status: r.status, json };
+  }
+
   private save(name: string, req: any, status: number, res: any) {
     mkdirSync(REC_DIR, { recursive: true });
     const file = join(REC_DIR, `${String(++this.seq).padStart(4, '0')}_${Date.now()}_${name}.json`);

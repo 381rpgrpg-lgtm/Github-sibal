@@ -28,9 +28,10 @@ const EXPECT = {
   MsgScriptProgressReq: 'MsgScriptProgressAns', MsgSelectPassengerReq: 'MsgSelectPassengerAns', MsgSellPartsReq: 'MsgDeleteParts',
   MsgSetCurrentCarReq: 'MsgSetCurrentCarAns', MsgUpdateNquestReq: 'MsgUpdateNquestAns', MsgUpgradeCarReq: 'MsgUpgradeCarAns',
   MsgUpgradeInfoReq: 'MsgUpgradeInfoAns', MsgUseItemReq: 'MsgUseItemAns', MsgLoginReq: 'MsgUserData',
+  MsgWRaceRewardReq: 'MsgWRaceRewardAns', MsgWorldTourRewardReq: 'MsgWorldTourRewardAns', MsgBattleMatchReq: 'MsgBattleMatchAns', MsgExpandSlotReq: 'MsgExpandSlotAns', // 클라이언트 코드 기준 (기록 없음)
 };
 // 캐시를 쓸 수 있는 요청 (상한 안에서만). 그 밖의 요청에서 캐시가 줄면 ALERT.
-const CASH_SPENDERS = new Set(['MsgBuyProductReq', 'MsgMasteryExpandReq']);
+const CASH_SPENDERS = new Set(['MsgBuyProductReq', 'MsgMasteryExpandReq', 'MsgExpandSlotReq', 'MsgNquestObjectiveClearReq', 'MsgGirlExpansionCritClearReq', 'MsgDateProposeReq']);
 
 let OUT = '.', log = console.log;
 let lastUd = null, lastCash = null, protectCache = null, allowCombineIds = new Set();
@@ -134,8 +135,47 @@ async function beforeSend(name, body) {
   return { ok: true };
 }
 
-/** 받은 뒤 처리: 상태 추적, 캐시 지출 기록, 정상 응답 확인 */
+// ── 무작위 결과 표본 (run/samples.jsonl, 한 줄 = 한 건) ──
+// 서버에만 있는 확률·규칙(상자 내용물, 강화 대성공, 조합 결과, 데이트 중 사건, 삐침, 레이스 드롭, 대전 상대)을 표본으로 쌓아
+// 오프라인 서버가 분포를 추정하는 데 쓴다. 기록만 하고 판단에는 쓰지 않는다.
+function sample(rec) { try { fs.appendFileSync(`${OUT}/samples.jsonl`, JSON.stringify({ t: new Date().toISOString().slice(0, 19), ...rec }) + '\n'); } catch {} }
+const brief = (ri) => ri ? { coin: ri.Coin || undefined, cash: ri.Cash || undefined, items: (ri.ItemInfo ?? []).map((x) => [x.Itemtype, x.Count ?? x.DeltaNum ?? x.StackNum]), cars: (ri.CarInfo ?? []).map((c) => c.Cartype), grade: ri.ContainerGrade || undefined } : null;
+function collect(name, body, msgs) {
+  const get = (n) => msgs.find((m) => m.name === n)?.body;
+  const chunks = (b) => (b?.Script?.Chunk ?? []).map((c) => c.ScriptName).filter((n) => /^Date_Event_/.test(n));
+  if (name === 'MsgUseItemReq') { const a = get('MsgUseItemAns'); if (a?.Result === 1 && a.RewardInfo) sample({ kind: 'box', item: a.RequestedItem?.Itemtype, got: brief(a.RewardInfo) }); }
+  if (name === 'MsgBuyProductReq') { const a = get('MsgBuyProductAns'); if (a?.Result === 1) sample({ kind: 'shop', id: Number(body?.StoreItemId), got: brief(a.RewardInfo) }); }
+  if (name === 'MsgUpgradeCarReq') {
+    const a = get('MsgUpgradeCarAns'), cars = lastUd?.Cars?.CarInfo ?? [];
+    const tgt = cars.find((c) => c.Carid === Number(body?.TargetCarInfo?.Carid));
+    if (a) sample({ kind: 'upgrade', result: a.Result, target: tgt && [tgt.Cartype, tgt.UpgradeLevel, tgt.CarExp ?? 0], mats: (body?.SourceCarInfo ?? []).map((s) => { const c = cars.find((x) => x.Carid === Number(s.Carid)); return c ? [c.Cartype, c.UpgradeLevel] : s.Carid; }),
+      after: a.ResultCarInfo && [a.ResultCarInfo.UpgradeLevel, a.ResultCarInfo.CarExp], bonus: !!a.BonusCarInfo, keys: Object.keys(a).filter((k) => !['Seq', 'UserInfo', 'ResultCarInfo'].includes(k)) });
+  }
+  if (name === 'MsgCombineCarReq') {
+    const a = get('MsgCombineCarAns'), cars = lastUd?.Cars?.CarInfo ?? [];
+    const ct = (id) => cars.find((c) => c.Carid === Number(id))?.Cartype;
+    if (a) sample({ kind: 'combine', result: a.Result, target: ct(body?.TargetCarID), source: ct(body?.SourceCarID), got: a.ResultCarInfo?.Cartype });
+  }
+  if (name === 'MsgCombinePartsReq') { const a = get('MsgCombinePartsAns'); if (a?.Upgraded) sample({ kind: 'partsCombine', part: a.Upgraded.Itemtype, prev: [a.Upgraded.PrevItemLevel, a.Upgraded.PrevItemExp], after: [a.Upgraded.ItemLevel, a.Upgraded.ItemExp], mats: (a.Consumed ?? []).map((x) => x.Itemtype) }); }
+  if (name === 'MsgDateStartReq' || name === 'MsgScriptProgressReq') {
+    const ev = msgs.flatMap((m) => chunks(m.body));
+    if (ev.length) sample({ kind: 'dateEvent', req: name, girl: Number(body?.GirlInfo?.Girlid) || undefined, place: body?.DatePlace, index: body?.Index, events: ev });
+  }
+  for (const m of msgs) { // 삐침: 어떤 응답이든 GirlInfo 에 Emotion 2 또는 삐침 원인이 나오면
+    for (const g of [].concat(m.body?.GirlInfo ?? [], m.body?.UpdateGirlInfo ?? [])) {
+      if (g && (Number(g.Emotion) === 2 || Number(g.CauseOfPeevish) > 0)) sample({ kind: 'peevish', req: name, girl: g.Girlid, emotion: g.Emotion, cause: g.CauseOfPeevish, solution: g.SolutionForPeevish, fam: g.Familiarity });
+    }
+  }
+  if (name === 'MsgRaceRewardReq') { const a = get('MsgRaceRewardAns'); if (a?.RewardInfo) sample({ kind: 'raceReward', zone: body?.ZoneId, race: body?.RaceId, got: brief(a.RewardInfo) }); }
+  if (name === 'MsgBattleResultReq') { const a = get('MsgBattleResultAns'); if (a) sample({ kind: 'raceResult', type: a.RaceType, race: a.Race?.RaceId ?? a.BattleId, win: a.IsPlayerWin, drops: (a.ItemInfo ?? []).map((x) => x.Itemtype), coin: a.DeltaInfo?.Coin, grade: a.ClearRec?.Grade }); }
+  if (/^MsgBattleMatch/.test(name) || msgs.some((m) => m.name === 'MsgBattleMatchResult')) {
+    for (const m of msgs.filter((x) => /BattleMatch/.test(x.name))) sample({ kind: 'duelMatch', msg: m.name, body: JSON.stringify(m.body).slice(0, 1500) });
+  }
+}
+
+/** 받은 뒤 처리: 상태 추적, 캐시 지출 기록, 정상 응답 확인, 표본 수집 */
 function onResponse(name, body, msgs) {
+  try { collect(name, body, msgs); } catch (e) { log('sample err ' + e.message); }
   const ud = msgs.find((m) => m.name === 'MsgUserData')?.body;
   if (name === 'MsgLoginReq' && ud) { lastUd = ud; computeProtect(ud); }
   const cash = msgs.map((m) => m.body?.UserInfo?.Cash ?? (m.name === 'MsgUserData' ? m.body?.UserInfo?.Cash : undefined)).find((v) => v !== undefined);

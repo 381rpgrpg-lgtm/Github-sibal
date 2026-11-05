@@ -36,6 +36,7 @@ const SLOT_COST: Record<string, { Coin?: number; Cash?: number }> = {
   '4|2': { Coin: 2400 }, '4|3': { Coin: 2400 }, '4|4': { Coin: 14400 },
 };
 import { carDef } from './upgradecalc.js';
+import { applySetEffects, partDef } from '../gamecalc.js';
 const slotCost = (car: any, slot: number) => {
   const max = Number(carDef(car.Cartype)?.Slot) || 2;
   if (slot > max) return null;
@@ -85,12 +86,19 @@ register('MsgEquipPartsReq', (body, ctx): Msg[] => {
     if (!car) return fail('차량 없음');
     if (index < 1 || index > (Number(car.SlotNum) || 1)) return fail(`열리지 않은 슬롯 ${index}/${car.SlotNum}`);
     const prev = items.find((x) => x !== part && Number(x.Equipcarid) === carid && Number(x.Equipindex) === index);
+    // 같은 계열(parts.json Category)은 한 차에 하나: 다른 칸에 있어도 빠진다
+    //   (실기록 2026-11-05: 3번 차 3번 칸에 33101 장착 -> 2번 칸의 33001(같은 계열 3)이 빠짐, 응답 ItemInfo [33101, 33001])
+    const cat = Number(partDef(part.Itemtype)?.Category) || 0;
+    const sameCat = cat ? items.find((x) => x !== part && x !== prev && Number(x.Equipcarid) === carid && Number(partDef(x.Itemtype)?.Category) === cat) : null;
+    const fromCar = Number(part.Equipcarid) > 0 && Number(part.Equipcarid) !== carid ? findCar(snap, Number(part.Equipcarid)) : null;
     // 교체: 새 부품이 먼저, 빠진 부품이 뒤 (실기록 2026-11-02 2건: [(38, 3, 2), (5, 0, 0)]). 기존 부품은 무료로 빠진다.
     part.Equipcarid = carid; part.Equipindex = index;
     changed.push(part);
-    if (prev) { prev.Equipcarid = 0; prev.Equipindex = 0; changed.push(prev); }
+    for (const x of [prev, sameCat]) if (x) { x.Equipcarid = 0; x.Equipindex = 0; changed.push(x); }
+    if (fromCar) applySetEffects(snap, fromCar);
     ui.Completion = Number(ui.Completion) | TUT_EQUIP_PARTS;
   }
+  if (car) applySetEffects(snap, car);
   const qch = refreshQuests(snap);
   ctx.store.putUser(ctx.session.accountId, snap);
   return [{

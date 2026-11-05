@@ -315,6 +315,21 @@ async function manage() {
   } catch (e) { log('event err ' + e); }
   // 우편
   for (const m of ud.MailBox?.Mail ?? []) { await rpc('MsgGetMailItemReq', { Mail: { MailId: m.MailId } }); act(`mail ${m.MailId} ${m.Subject} ${m.Itemtype}x${m.Itemnum}`); }
+  // 시즌 보상 (클라이언트 WeeklyRaceResultPopup.OnClickGetReward / WorldTourRewardPopup.OnClickGet):
+  //   지난 시즌 결과가 계정 데이터에 있으면 수령. 같은 시즌은 한 번만 (run/season.json)
+  { const sf = `${OUT}/season.json`, done = fs.existsSync(sf) ? JSON.parse(fs.readFileSync(sf, 'utf8')) : {};
+    const ws = ud.WraceResult?.WSeasonId;
+    if (ws && !done['w' + ws]) {
+      const a = pick(await rpc('MsgWRaceRewardReq', { WSeasonId: ws }), 'MsgWRaceRewardAns');
+      act(`weekly season ${ws} reward: Result ${a?.Result} ${JSON.stringify(a?.RewardInfo ?? a?.Reward ?? null).slice(0, 160)}`);
+      done['w' + ws] = new Date().toISOString(); fs.writeFileSync(sf, JSON.stringify(done));
+    }
+    const wt = ud.WorldTourResult?.SeasonId ?? ud.WorldTourResult?.Season;
+    if (ud.MyWorldTourResult && wt && !done['t' + wt]) {
+      const a = pick(await rpc('MsgWorldTourRewardReq', {}), 'MsgWorldTourRewardAns');
+      act(`world tour season ${wt} reward: Result ${a?.Result} ${JSON.stringify(a?.RewardInfo ?? null).slice(0, 160)}`);
+      done['t' + wt] = new Date().toISOString(); fs.writeFileSync(sf, JSON.stringify(done));
+    } }
   // 일일 미션: 데이트 3회 (dates.cjs, 실측 흐름). 사라(퀘스트 10503) 우선, 같은 장소 연속(지루함) 피해 공원·대학·카페 순환, 쿨타임 30초
   try {
     const dqd = (ud.PropertySet?.Property ?? []).find((p) => p.PropertyName === 'DQUEST_DATE');

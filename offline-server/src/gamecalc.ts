@@ -94,6 +94,35 @@ export function finalAttr(snap: any, car: any): Record<string, number> {
   return out;
 }
 
+/** 부품 세트 효과 -> car.CarEffect (EType 4). 실데이터 2026-11-05 10604 (세트 3 부품 37201·37204·37202 장착):
+ *   CarEffect [{EType 4, ESet 2, EId 3, EAttr {MaxSpd 5, Stab 5}}, {EType 4, ESet 3, EId 3, EAttr {Acc 15, Drift 15}}]
+ *   = parts.json SetEffects[Setid].SetEffectValueN x SetEffectType[SetEffectN] 가중치 (세트 3: 2개 10 x 0.5, 3개 30 x 0.5). 2·3·4개 단계 누적.
+ *   finalAttr 는 CarEffect 를 더한다. 추정: 소수는 버림, 차종 제한 추가 효과(CarLimitFlag·CarEffect 필드)는 미반영, EType 4 외 효과는 그대로 둔다. */
+export function applySetEffects(snap: any, car: any): void {
+  if (!car) return;
+  const pt = table('parts.json') ?? {};
+  const count = new Map<number, number>();
+  for (const it of snap.Items?.ItemInfo ?? []) {
+    if (Number(it.Equipcarid) !== Number(car.Carid) || !(Number(it.Equipindex) > 0)) continue;
+    const sid = Number(partDef(it.Itemtype)?.Setid) || 0;
+    if (sid) count.set(sid, (count.get(sid) ?? 0) + 1);
+  }
+  const effects: any[] = [];
+  for (const [sid, n] of count) {
+    const se = (pt.SetEffects ?? []).find((x: any) => Number(x.Setid) === sid);
+    for (const k of [2, 3, 4]) {
+      if (n < k || !se?.['SetEffect' + k]) continue;
+      const ty = (pt.SetEffectType ?? []).find((x: any) => Number(x.Id) === Number(se['SetEffect' + k])) ?? {};
+      const v = Number(se['SetEffectValue' + k]) || 0;
+      const EAttr: any = {};
+      for (const a of ATTRS) EAttr[a] = Math.floor(v * (Number(ty[a]) || 0));
+      effects.push({ EType: 4, ESet: k, EId: sid, EAttr });
+    }
+  }
+  const others = (car.CarEffect ?? []).filter((e: any) => Number(e.EType) !== 4);
+  if (effects.length || car.CarEffect) car.CarEffect = [...others, ...effects];
+}
+
 /** 레이스 상대 난이도 표시 (RelativeDifficulty). 실기록: 내 최종 능력치 합 / 상대 합 1.53 -> 1, 1.29·1.24·1.20·1.14·1.088 -> 2,
  *  1.075·1.0·0.956 -> 3, 0.917·0.85·0.83·0.784 -> 4, 0.730·0.709·0.69~0.54 -> 5 (2026-11-02 봇 기록 26건 추가).
  *  경계값은 그 사이에서 추정 (1.3 이상 1, 1.08 이상 2, 0.94 이상 3, 0.75 이상 4, 그 아래 5). */

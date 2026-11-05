@@ -42,7 +42,9 @@ function markers(ms, ctx) {
   while (queue.length && n++ < 12) {
     const mk = queue.shift(); const key = `${mk.depth}:${mk.index}`; if (done.has(key)) continue; done.add(key);
     const body = { Depth: mk.depth, Index: mk.index };
-    if (mk.sel) body.AnswerSelect = mk.depth === 0 ? (liked[`${girl}|${ctx.script}|${ctx.lv}|${mk.index}`] ?? 1) : 1;
+    // DG_BAD=1: 삐침 실험용 — 좋아하는 답이 아닌 답을 고른다 (문항: 좋아하는 답이 1이면 2, 아니면 1 / 사건 문항: 2)
+    const BAD = process.env.DG_BAD === '1';
+    if (mk.sel) { const lk = liked[`${girl}|${ctx.script}|${ctx.lv}|${mk.index}`] ?? 1; body.AnswerSelect = mk.depth === 0 ? (BAD ? (lk === 1 ? 2 : 1) : lk) : (BAD ? 2 : 1); }
     if (mk.shop) body.AnswerSelect = Number(present) || 0;
     const ms = await rpc('MsgScriptProgressReq', body);
     if (!place) fs.appendFileSync(__dirname + '/run/dept-progress.jsonl', JSON.stringify({ body, fn: mk.fn, ms }) + '\n');

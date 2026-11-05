@@ -169,6 +169,29 @@ register('MsgGirlExpansionInfoReq', (body, ctx): Msg[] => {
   return [{ name: 'MsgGirlExpansionInfoAns', body: { Seq: 1, Result: 1, GirlInfo: { Girlid: id, GirlExpansionCritInfo: critProgress(snap, g, set) } } }];
 });
 
+// 한계 돌파 조건 캐시 완료 MsgGirlExpansionCritClearReq {Critid, GirlInfo:{Girlid}} (클라이언트 GirlExpansionCell.OnClickClear, 확인 창의 값 = ClearCash 캐시)
+//   추정(기록 없음): 캐시 ClearCash 차감, 그 조건 CurrentValue = Param1 로 저장(GirlExpansionCritInfo), 응답 {Seq, Result 1, UserInfo, GirlInfo:{Girlid, GirlExpansionCritInfo}}.
+//   캐시 부족 7 (클라이언트가 buy_cash 로 안내하는 코드), 이미 달성 또는 없는 조건 2.
+register('MsgGirlExpansionCritClearReq', (body, ctx): Msg[] => {
+  const snap = ctx.store.getUser(ctx.session.accountId);
+  const id = Number(body?.GirlInfo?.Girlid);
+  const g = myOpenGirl(snap, id);
+  const fail = (Result = 2): Msg[] => [{ name: 'MsgGirlExpansionCritClearAns', body: { Seq: 1, Result, ...(snap ? { UserInfo: snap.UserInfo } : {}) } }];
+  if (!snap || !g) return fail();
+  const set = critSet(id, (Number(g.Rarity) || 1) + 1);
+  const crit = (set?.SGirlExpansionCrit ?? []).find((c: any) => Number(c.Critid) === Number(body?.Critid));
+  if (!crit) return fail();
+  const prog = critProgress(snap, g, set);
+  const cur = prog.find((c) => c.Critid === Number(crit.Critid));
+  if (!cur || cur.CurrentValue >= Number(crit.Param1)) return fail();
+  const cost = Number(cur.ClearCash) || Number(crit.ClearCash) || 0;
+  if ((Number(snap.UserInfo.Cash) || 0) < cost) return fail(7);
+  snap.UserInfo.Cash = Number(snap.UserInfo.Cash) - cost;
+  g.GirlExpansionCritInfo = prog.map((c) => (c.Critid === Number(crit.Critid) ? { ...c, CurrentValue: Number(crit.Param1) } : c));
+  ctx.store.putUser(ctx.session.accountId, snap);
+  return [{ name: 'MsgGirlExpansionCritClearAns', body: { Seq: 1, Result: 1, UserInfo: snap.UserInfo, GirlInfo: { Girlid: id, GirlExpansionCritInfo: g.GirlExpansionCritInfo } } }];
+});
+
 register('MsgGirlRarityExpandReq', (body, ctx): Msg[] => {
   const snap = ctx.store.getUser(ctx.session.accountId);
   const id = Number(body?.GirlInfo?.Girlid);
