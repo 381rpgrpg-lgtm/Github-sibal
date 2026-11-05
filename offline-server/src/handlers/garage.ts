@@ -49,6 +49,12 @@ register('MsgUpgradeCarReq', (body, ctx): Msg[] => {
   if (sources.length) {
     const pv = upgradePreview(snap, car, sources);
     if ('error' in pv) return fail(pv.error);
+    // 재료 등급 하한 (실기록 2026-11-05): ★5 대상 + ★1 재료 -> Result 2 (같은 ★1 차량이 ★4 대상에는 성공, ★5 대상에 ★2 재료는 성공).
+    //   강화 정보(MsgUpgradeInfoReq)는 같은 조합에도 Result 1 이었다. 추정: 등급 차 3 초과면 거절
+    const tg = Number(car.Grade) || 1;
+    const low = sources.map((x: any) => (snap.Cars?.CarInfo ?? []).find((c: any) => Number(c.Carid) === Number(x.Carid)))
+      .find((c: any) => c && tg - (Number(c.Grade) || 1) > 3);
+    if (low) return fail(`재료 등급 너무 낮음 (★${low.Grade} -> ★${tg})`);
     if ((Number(ui.Coin) || 0) < pv.cost) return [{ name: 'MsgUpgradeCarAns', body: { Seq: 1, Result: 3, UserInfo: ui } }];
     ui.Coin -= pv.cost;
     Object.assign(car, pv.expected);

@@ -420,7 +420,7 @@ async function manage() {
     const target = g3[0] ?? (best.UpgradeLevel < 10 ? best : null);
     // 재료 상자 (사용자 지시: 코인은 쌓아 둘 필요 없이 적정선에서): 강화 대상이 있고 재료(★1·★2)가 없고 차고가 비면
     //   소셜 포인트 차량 상자(72007, 150 SP) -> 코인 중고 차량 상자(73008, 코인 15만 초과분만). 하루 코인 상자 최대 COINBOX_DAY 개.
-    const matsNow = target ? others.filter((c) => c.Carid !== target.Carid && (!isProtected(c, curCar) || spare3(c)) && carGradeOf(c) <= carGradeOf(target)) : [];
+    const matsNow = target ? others.filter((c) => c.Carid !== target.Carid && (!isProtected(c, curCar) || spare3(c)) && carGradeOf(c) <= carGradeOf(target) && carGradeOf(c) >= carGradeOf(target) - 3) : [];
     if (target && !matsNow.length && ud.Cars.CarInfo.length < ud.UserInfo.GarageSize) {
       const day = new Date().toISOString().slice(0, 10), cbf = `${OUT}/coinbox.json`;
       const cb = fs.existsSync(cbf) ? JSON.parse(fs.readFileSync(cbf, 'utf8')) : {};
@@ -440,7 +440,9 @@ async function manage() {
     const matExp = (c) => Number(lvRow(carGradeOf(c), Number(c.UpgradeLevel) || 1).MaterialExp) || 0;
     let need = target ? -(Number(target.CarExp) || 0) : 0;
     if (target) for (let l = target.UpgradeLevel; l < 10; l++) need += Number(lvRow(carGradeOf(target), l).CarExp) || 0;
-    const pool = target ? ud.Cars.CarInfo.filter((c) => c.Carid !== target.Carid && c.Carid !== curCar.Carid && !c.IsLocked && !c.IsExhibited && (!isProtected(c, curCar) || spare3(c)) && carGradeOf(c) <= carGradeOf(target)).sort((a, b) => matExp(a) - matExp(b)) : [];
+    // 재료 등급 하한: ★5 대상에 ★1 재료는 실서버 Result 2 (2026-11-05: 같은 ★1 차량이 ★4 대상에는 성공, ★5 에는 거절. ★2 재료는 ★5 에 성공) -> 등급 차 3 이하만
+    const matOk = (c) => carGradeOf(c) <= carGradeOf(target) && carGradeOf(c) >= carGradeOf(target) - 3;
+    const pool = target ? ud.Cars.CarInfo.filter((c) => c.Carid !== target.Carid && c.Carid !== curCar.Carid && !c.IsLocked && !c.IsExhibited && (!isProtected(c, curCar) || spare3(c)) && matOk(c)).sort((a, b) => matExp(a) - matExp(b)) : [];
     const mats = []; let got = 0; for (const c of pool) { if (got >= need) break; mats.push(c); got += matExp(c); }
     if (mats.length && ud.UserInfo.Coin > 8000) {
       const info = pick(await rpc('MsgUpgradeInfoReq', { TargetCarInfo: { Carid: target.Carid }, SourceCarInfo: mats.map((c) => ({ Carid: c.Carid })) }), 'MsgUpgradeInfoAns');
@@ -646,8 +648,9 @@ async function playRace(t) {
       if (k) { for (let j = 0; j < 3; j++) { await page.mouse.click(60, 25); await sleep(3000); } }
       reqSeen.length = 0;
       await page.mouse.click(460, 610); await sleep(2500); // 허브의 '새 거리 단어' 팝업 OK (2026-11-05: 월드 투어 브론즈 단어 팝업이 클릭을 가로챔)
-      await page.mouse.click(1190, 640); await sleep(7000);
-      await page.mouse.click(795, 450); await sleep(9000);
+      await page.mouse.click(1190, 640); await sleep(10000);
+      // 카드 클릭이 화면 전환 직후엔 먹지 않을 때가 있다 (2026-11-05 13:51: Challenge 화면 그대로) -> 같은 화면에서 최대 3번 누른다
+      for (let j = 0; j < 3 && !reqSeen.includes('MsgOpenWorldTourReq'); j++) { await page.mouse.click(795, 450); await sleep(8000); }
       opened = reqSeen.includes('MsgOpenWorldTourReq');
       if (!opened) { log(`world tour screen not opened (try ${k + 1}): ${reqSeen.slice(-6).join(',')}`); await shot('wt-fail'); }
     }
