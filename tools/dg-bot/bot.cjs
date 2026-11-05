@@ -361,7 +361,9 @@ async function manage() {
       const hf = `${OUT}/dateplaces.json`; let hist = {}; try { hist = JSON.parse(fs.readFileSync(hf, 'utf8')); } catch {}
       const want = new Map();
       // 삐친 캐릭터(Emotion 1)는 데이트 한 번으로 풀린다 (실기록 2026-11-05: 20101·20303). 삐침은 동승 효과를 끄므로(20303 은 +616) 먼저 데이트
-      for (const x of ud.MyGirls?.MyGirlInfo ?? []) if (x.State === 7 && Number(x.Emotion) === 1) want.set(x.Girlid, { q: 'peevish', place: 0 });
+      // run/peevish-keep.json [캐릭터]: 삐침 방치 실험 대상은 풀지 않는다 (2026-11-06 사용자 승인: 차민 20101, 호감도 하락 관찰)
+      let keepPeevish = []; try { keepPeevish = JSON.parse(fs.readFileSync(`${OUT}/peevish-keep.json`, 'utf8')); } catch {}
+      for (const x of ud.MyGirls?.MyGirlInfo ?? []) if (x.State === 7 && Number(x.Emotion) === 1 && !keepPeevish.includes(x.Girlid)) want.set(x.Girlid, { q: 'peevish', place: 0 });
       for (const q of ud.NquestInfos?.NquestInfo ?? []) if (q.State === 3) for (const o of QUESTS.find((x) => x.Id === q.QuestId)?.Objective ?? []) {
         const cur = q.Objective?.find((x) => x.ObjId === o.ObjId)?.CurrentValue ?? 0;
         if (cur >= Number(o.Param[0] || 1)) continue;
@@ -814,6 +816,10 @@ async function finishRace(t, tp, phases) {
       const now = {};
       for (const g of ud.MyGirls?.MyGirlInfo ?? []) if (g.State === 7) now[g.Girlid] = [Number(g.Emotion) || 0, Number(g.CauseOfPeevish) || 0, Number(g.NthDate) || 0, Number(g.Familiarity) || 0];
       for (const [id, v] of Object.entries(now)) { const o = prev[id];
+        if (o && v[3] < o[3]) { // 호감도 감소 (삐침 방치 등): 기분·시각과 함께 기록
+          fs.appendFileSync(`${OUT}/samples-mood.jsonl`, JSON.stringify({ at: new Date().toISOString(), girl: Number(id), famDrop: o[3] - v[3], from: o, to: v }) + '\n');
+          log(`FAM DROP ${id}: ${o[3]} -> ${v[3]} (emotion ${v[0]})`);
+        }
         if (o && (o[0] !== v[0] || o[1] !== v[1])) {
           fs.appendFileSync(`${OUT}/samples-mood.jsonl`, JSON.stringify({ at: new Date().toISOString(), girl: Number(id), from: o, to: v, passenger: ud.UserInfo.PassengerGirl, lastRace: stats.races.at(-1)?.race, recent: stats.actions.slice(-5) }) + '\n');
           log(`MOOD ${id}: emotion ${o[0]}->${v[0]} cause ${o[1]}->${v[1]}`);
