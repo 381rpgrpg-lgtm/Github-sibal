@@ -382,7 +382,7 @@ export function worldTourResult(body: any, ctx: Ctx): Msg[] {
   // 동승 캐릭터 친밀도 (실기록: 승패 모두 +10, UpdateGirlInfo 에 그 캐릭터 레코드)
   const updateGirl: any[] = [];
   const pg = (snap.MyGirls?.MyGirlInfo ?? []).find((g: any) => Number(g.Girlid) === Number(ui.PassengerGirl) && Number(g.State) === 7);
-  if (pg) { pg.Familiarity = (Number(pg.Familiarity) || 0) + FAMILIARITY; syncGirl(pg); updateGirl.push(pg); }
+  if (pg && Number(pg.Emotion) !== 1) { pg.Familiarity = (Number(pg.Familiarity) || 0) + FAMILIARITY; syncGirl(pg); updateGirl.push(pg); } // 삐침(1)이면 오르지 않음 (클라이언트 안내)
   if (!withdraw) questEvent(snap, 1, (p) => Number(p[1]) === 4000); // 퀘스트 17999 '월드 투어 70회 참가' [70, 4000]
   const questChanges = refreshQuests(snap);
   ctx.store.putUser(uid(ctx), snap);

@@ -452,6 +452,24 @@ async function manage() {
         act(`upgrade car ${target.Carid} with ${mats.map((c) => c.Cartype)} cost ${cost}: Result ${a?.Result} -> Lv ${a?.ResultCarInfo?.UpgradeLevel}`);
       }
     }
+    // 보조 강화: 대상에 못 쓰는 낮은 등급 재료(예 ★5 대상일 때 ★1 상자 차량)는 현재 차가 아닌 ★3·★4 중 Lv10 미만인 가장 높은 등급 차에 넣는다
+    //   (쌓여서 차고를 채우지 않게. 2026-11-05: ★1 이 ★5 에 거절되고 ★4 차량 8 에는 성공)
+    if (target) {
+      const u2 = pick(await rpc('MsgLoginReq'), 'MsgUserData');
+      const cur2 = u2.Cars.CarInfo.find((c) => c.Carid === u2.UserInfo.Currentcar);
+      const left = u2.Cars.CarInfo.filter((c) => c.Carid !== cur2.Carid && !c.IsLocked && !c.IsExhibited && !isProtected(c, cur2) && carGradeOf(c) < carGradeOf(target) - 3);
+      const sink = u2.Cars.CarInfo.filter((c) => c.Carid !== cur2.Carid && !c.IsLocked && carGradeOf(c) >= 3 && carGradeOf(c) <= 4 && Number(c.UpgradeLevel) < 10 && left.some((m) => carGradeOf(m) >= carGradeOf(c) - 3))
+        .sort((a, b) => carGradeOf(b) - carGradeOf(a) || b.UpgradeLevel - a.UpgradeLevel)[0];
+      const use = sink ? left.filter((m) => carGradeOf(m) >= carGradeOf(sink) - 3 && carGradeOf(m) <= carGradeOf(sink)) : [];
+      if (sink && use.length && u2.UserInfo.Coin > 8000) {
+        const info = pick(await rpc('MsgUpgradeInfoReq', { TargetCarInfo: { Carid: sink.Carid }, SourceCarInfo: use.map((c) => ({ Carid: c.Carid })) }), 'MsgUpgradeInfoAns');
+        const cost = info?.Cost?.Coin ?? 1e9;
+        if (cost < u2.UserInfo.Coin - 3000) {
+          const a = pick(await rpc('MsgUpgradeCarReq', { TargetCarInfo: { Carid: sink.Carid }, SourceCarInfo: use.map((c) => ({ Carid: c.Carid })) }), 'MsgUpgradeCarAns');
+          act(`upgrade (leftover) car ${sink.Carid} with ${use.map((c) => c.Cartype)} cost ${cost}: Result ${a?.Result} -> Lv ${a?.ResultCarInfo?.UpgradeLevel}`);
+        }
+      }
+    }
   } catch (e) { log('upgrade err ' + e); }
   // 현재 차량 빈 부품 칸 채우기 (2026-11-05: ★5 NSR+ 로 바꾼 뒤 칸이 비어 있었다): 장착 안 된 부품 중 능력치 합이 큰 것,
   //   그 차에 이미 단 분류(Category)는 제외 (한 차에 분류당 1개). MsgEquipPartsReq {Itemid, Equipindex, Equipcarid} -> MsgChangeParts

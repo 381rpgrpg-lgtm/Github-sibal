@@ -22,6 +22,7 @@ import { register, type Ctx, type Msg } from '../rpc.js';
 import { table, areaOf, makeOpponent, finalAttr, carDefOf, carName, syncGirl, ATTRS } from '../gamecalc.js';
 import { levelUp, addMastery, bumpProperty } from './battle.js';
 import { refreshQuests } from '../quests.js';
+import { tougeRaceWin } from './touge.js';
 
 const ST = { PLAYABLE: 1, CLEAR: 2, WIN: 16 } as const;
 const now = () => Date.now() / 1000;
@@ -153,6 +154,9 @@ export function eventResult(body: any, ctx: Ctx, snap: any, zone: any, race: any
   const coin = win ? Number(race.RewardCoin) || 0 : 0;
   const winPoint = win && race.State & ST.PLAYABLE && !(race.State & ST.WIN) ? Number(race.WinPoint) || 0 : 0;
   let clear: any = null;
+  // Haunted Pass Board 무료 주사위 (touge.ts): 스토리·보스 레이스 첫 승리. 승리 비트를 세우기 전에 확인한다.
+  //   실기록 3103 보스 첫 승: 결과 뒤 MsgNotifyEvent {TougeTickets {Added 1, Tickets 1, Moves 2, Why ['boss']}}
+  const touge = win && !(race.State & ST.WIN) ? tougeRaceWin(snap, zone.ZoneId, race.RaceIndex) : null;
   if (win) {
     const miss = Number(body.MissCnt) || 0, bad = Number(body.BadCnt) || 0;
     const grade = miss === 0 && bad === 0 ? 1 : miss === 0 ? 2 : 3;
@@ -175,7 +179,7 @@ export function eventResult(body: any, ctx: Ctx, snap: any, zone: any, race: any
   // 동승 캐릭터 친밀도 +10 (기록 7건: 20405 534 -> 544 -> ... -> 594, 결과 UpdateGirlInfo 에 캐릭터 레코드). 패배도 같다고 추정.
   const updateGirl: any[] = [];
   const passenger = withdraw ? null : (snap.MyGirls?.MyGirlInfo ?? []).find((g: any) => Number(g.Girlid) === Number(ui.PassengerGirl));
-  if (passenger) { passenger.Familiarity = (Number(passenger.Familiarity) || 0) + 10; syncGirl(passenger); updateGirl.push(passenger); }
+  if (passenger && Number(passenger.Emotion) !== 1) { passenger.Familiarity = (Number(passenger.Familiarity) || 0) + 10; syncGirl(passenger); updateGirl.push(passenger); } // 삐침(1)이면 오르지 않음
   const questChanges = refreshQuests(snap);
   const uiOut = { ...ui };
   ctx.store.putUser(ctx.session.accountId, snap);
@@ -193,7 +197,8 @@ export function eventResult(body: any, ctx: Ctx, snap: any, zone: any, race: any
       MyCarInfo: { ...car, FinalAttr: faBefore }, NewCars: [], UpdateGirlInfo: updateGirl, GgraphPatch: { Gnode: [] },
       ...(propChanged ? { PropertySet: snap.PropertySet } : {}),
     },
-  }, ...(questChanges.length ? [{ name: 'MsgUpdateNquest', body: { Seq: 2, NquestInfo: questChanges } }] : [])];
+  }, ...(questChanges.length ? [{ name: 'MsgUpdateNquest', body: { Seq: 2, NquestInfo: questChanges } }] : []),
+  ...(touge ? [{ name: 'MsgNotifyEvent', body: { Seq: 3, TougeTickets: touge } }] : [])];
 }
 
 function addMail(snap: any, itemtype: number, itemnum: number, subject: string, content: string): any {

@@ -22,6 +22,7 @@ import './handlers/date.js';
 import './handlers/inventory2.js';
 import './handlers/misc2.js';
 import './handlers/worldtour.js';
+import './handlers/touge.js';
 
 const cfg = JSON.parse(readFileSync(new URL('../config.json', import.meta.url), 'utf8'));
 const CLIENT_DIR = new URL('../data/client/', import.meta.url).pathname;

@@ -427,7 +427,8 @@ register('MsgBattleResultReq', (body, ctx: Ctx): Msg[] => {
   // 동승 캐릭터 친밀도
   const updateGirl: any[] = [];
   const passenger = passengerOn ? (snap.MyGirls?.MyGirlInfo ?? []).find((g: any) => Number(g.Girlid) === Number(ui.PassengerGirl)) : null;
-  if (passenger && fam) { passenger.Familiarity = (Number(passenger.Familiarity) || 0) + fam; syncGirl(passenger); updateGirl.push(passenger); }
+  // 삐친 캐릭터(Emotion 1)는 레이스로 호감도가 오르지 않는다 (클라이언트 안내 battle_result_notice_peevish)
+  if (passenger && fam && Number(passenger.Emotion) !== 1) { passenger.Familiarity = (Number(passenger.Familiarity) || 0) + fam; syncGirl(passenger); updateGirl.push(passenger); }
 
   // 결과 응답 FinalAttr 은 이번 숙련도 증가 전 값 (실기록: MasteryAttr 은 새 값, FinalAttr 은 이전 값 기준)
   const faBefore = finalAttr(girlRace ? { ...snap, UserInfo: { ...ui, PassengerGirl: -1 } } : snap, car);
