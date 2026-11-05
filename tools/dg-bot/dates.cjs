@@ -5,6 +5,10 @@
 const fs = require('fs');
 const B = 'http://localhost:8080';
 const liked = JSON.parse(fs.readFileSync('/home/user/Github-sibal/offline-server/src/data/date-answers.json', 'utf8')).liked;
+// 실제 반응으로 배운 답 (run/date-learned.json): 표는 반응 대사 비교 추정이라 틀린 칸이 있다 (2026-11-05: 20303 Date_Restaurant lv2 두 문항 -> 화남).
+//   싫어함(ActionResult 1)이면 다른 답을, 좋아함(3)이면 그 답을 기록하고 표보다 먼저 쓴다
+const LEARN = __dirname + '/run/date-learned.json';
+const learned = (() => { try { return JSON.parse(fs.readFileSync(LEARN, 'utf8')); } catch { return {}; } })();
 // 백화점 데이트: node dates.cjs <girlId> 0 <선물 플래그> — 장소 없이 Start {GirlInfo:{Girlid}} (클라이언트 OnClickDept),
 //   대본의 SHOPLIST 단계에 {Depth, Index, AnswerSelect: 플래그 합} (클라이언트 ShopList -> #progress). 플래그: 0 구경, 1·2·4·8 액세서리, 64 수영복
 //   (girlTable PresentPrice1..5, 수영복은 친밀도 3 이상 + 액세서리 4개(ItemFlag&15==15) 뒤에 열림. 수영복 = 한계 돌파 공통 조건 3 '수영복 선물')
@@ -44,11 +48,16 @@ function markers(ms, ctx) {
     const body = { Depth: mk.depth, Index: mk.index };
     // DG_BAD=1: 삐침 실험용 — 좋아하는 답이 아닌 답을 고른다 (문항: 좋아하는 답이 1이면 2, 아니면 1 / 사건 문항: 2)
     const BAD = process.env.DG_BAD === '1';
-    if (mk.sel) { const lk = liked[`${girl}|${ctx.script}|${ctx.lv}|${mk.index}`] ?? 1; body.AnswerSelect = mk.depth === 0 ? (BAD ? (lk === 1 ? 2 : 1) : lk) : (BAD ? 2 : 1); }
+    const akey = `${girl}|${ctx.script}|${ctx.lv}|${mk.index}`;
+    if (mk.sel) { const lk = learned[akey] ?? liked[akey] ?? 1; body.AnswerSelect = mk.depth === 0 ? (BAD ? (lk === 1 ? 2 : 1) : lk) : (BAD ? 2 : 1); }
     if (mk.shop) body.AnswerSelect = Number(present) || 0;
     const ms = await rpc('MsgScriptProgressReq', body);
     if (!place) fs.appendFileSync(__dirname + '/run/dept-progress.jsonl', JSON.stringify({ body, fn: mk.fn, ms }) + '\n');
     const a = pick(ms, 'MsgScriptProgressAns');
+    if (mk.sel && mk.depth === 0 && !BAD && (a?.ActionResult === 1 || a?.ActionResult === 3)) {
+      const real = a.ActionResult === 3 ? body.AnswerSelect : (body.AnswerSelect === 1 ? 2 : 1);
+      if ((learned[akey] ?? liked[akey] ?? 1) !== real) { learned[akey] = real; fs.writeFileSync(LEARN, JSON.stringify(learned)); console.log(`  learned ${akey} -> ${real}`); }
+    }
     if (a?.DateReward) result = a.DateReward;
     const fin = pick(ms, 'MsgDateResultAns'); if (fin) result = { ...(result ?? {}), final: fin.DateResult };
     const nw = markers(ms, ctx).filter((x) => !done.has(`${x.depth}:${x.index}`));
