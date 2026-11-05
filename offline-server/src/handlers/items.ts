@@ -28,6 +28,14 @@ register('MsgUseItemReq', (body, ctx): Msg[] => {
     return [{ name: 'MsgUseItemAns', body: { Seq: 1, Result: 2, ...(snap ? { UserInfo: snap.UserInfo } : {}) } }];
   };
   if (!snap) return fail('계정 없음');
+  // 데칼 떼기: {CarInfo:[{Carid, DecalIndex -1}]} (Item 없음, 클라이언트 SSCarCustomize 'unequip_decal'). 응답 형식은 붙이기와 같다고 추정, 아이템은 돌려주지 않음(추정)
+  if (!body?.Item && Array.isArray(body?.CarInfo) && body.CarInfo.length) {
+    const car = (snap.Cars?.CarInfo ?? []).find((c: any) => Number(c.Carid) === Number(body.CarInfo[0]?.Carid));
+    if (!car) return fail('차량 없음');
+    car.DecalIndex = -1;
+    ctx.store.putUser(ctx.session.accountId, snap);
+    return [{ name: 'MsgUseItemAns', body: { Seq: 1, Result: 1, UserInfo: snap.UserInfo, ItemInfo: [], CarInfo: [car] } }];
+  }
   const list: any[] = snap.Items?.ItemInfo ?? [];
   const item = list.find((x) => Number(x.Itemid) === Number(body?.Item?.Itemid));
   if (!item || !(Number(item.Count ?? item.StackNum) > 0)) return fail('아이템 없음');
@@ -42,6 +50,24 @@ register('MsgUseItemReq', (body, ctx): Msg[] => {
     return [{ name: 'MsgUseItemAns', body: { Seq: 1, Result: 1, UserInfo: ui, RequestedItem: { Itemid: Number(item.Itemid), Itemtype: Number(item.Itemtype) },
       ItemInfo: [{ Itemid: Number(item.Itemid), Itemtype: Number(item.Itemtype), StackNum: Math.max(left, 0) }] } }];
   };
+  // 데칼(621~625) 붙이기: {Item:{Itemid}, CarInfo:[{Carid, DecalIndex = 아이템 Resources}]}. 실기록 2026-11-05 (61305 5구역 보스 데칼 -> 차량 8 TOYOTA_86):
+  //   응답 {Seq, Result 1, UserInfo, RequestedItem, ItemInfo [{Itemid, Itemtype, StackNum 남은 수}], CarInfo [차량 DecalIndex 104]}, 비용 없음(보유분 1장 소모).
+  //   decals.json ModelHigh 목록이 있으면 그 모델만: 61307(다른 모델 전용)을 같은 차에 붙이려 하자 Result 2 {UserInfo, RequestedItem}.
+  if (cat >= 621 && cat <= 625 && Array.isArray(body?.CarInfo) && body.CarInfo.length) {
+    const car = (snap.Cars?.CarInfo ?? []).find((c: any) => Number(c.Carid) === Number(body.CarInfo[0]?.Carid));
+    const models: string[] = (table('decals.json')?.Decal ?? []).find((d: any) => Number(d.Id) === Number(item.Itemtype))?.ModelHigh ?? [];
+    const model = (table('cars.json')?.Car ?? []).find((c: any) => Number(c.Id) === Number(car?.Cartype))?.ModelHigh;
+    const req = { Itemid: Number(item.Itemid), Itemtype: Number(item.Itemtype) };
+    if (!car || (models.length && !models.includes(model))) {
+      console.warn(`[items] 데칼 거절: ${!car ? '차량 없음' : `모델 ${model} 은 ${models.join(',')} 전용 데칼 아님`}`);
+      return [{ name: 'MsgUseItemAns', body: { Seq: 1, Result: 2, UserInfo: ui, RequestedItem: req } }];
+    }
+    car.DecalIndex = Number(def.Resources);
+    const out = consume();
+    (out[0].body as any).CarInfo = [car];
+    ctx.store.putUser(ctx.session.accountId, snap);
+    return out;
+  }
   // 대전 티켓(641): FightTicket += itemTable Param (실기록 60114 +5, 60115 +10, 60109 +1).
   // 이벤트 티켓(642): EventRaceTicket += Param (기록 없음, 641 과 같은 방식으로 추정).
   if (cat === 641) { ui.FightTicket = (Number(ui.FightTicket) || 0) + (Number(def.Param) || 1); return consume(); }

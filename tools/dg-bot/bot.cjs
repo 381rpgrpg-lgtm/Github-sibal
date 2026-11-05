@@ -559,6 +559,7 @@ function eventRace() {
 
 // ── 브라우저 ──
 let browser, page, lastResult = null, raceStartAt = 0, eventZones = [];
+const reqSeen = []; // 브라우저가 보낸 RPC 이름 (화면 전환 확인용)
 let ogt = '';
 async function openGame() {
   const t0 = Date.now(), mark = (n) => { ogt += ` ${n}:${Math.round((Date.now() - t0) / 1000)}`; }; ogt = '';
@@ -585,7 +586,9 @@ async function openGame() {
     } catch {}
   });
   let hubSeen = false;
-  page.on('request', (r) => { if (r.url().endsWith('/api/rpc') && (r.postData() || '').includes('MsgSpecialMessageListReq')) hubSeen = true; });
+  page.on('request', (r) => { if (!r.url().endsWith('/api/rpc')) return; const pd = r.postData() || '';
+    if (pd.includes('MsgSpecialMessageListReq')) hubSeen = true;
+    try { reqSeen.push(JSON.parse(pd).name); if (reqSeen.length > 200) reqSeen.splice(0, 100); } catch {} });
   mark('launched');
   await page.goto(B + '/', { waitUntil: 'domcontentloaded' });
   mark('loaded');
@@ -618,12 +621,23 @@ async function playRace(t) {
     // 월드 투어 (2026-11-05 기록): 허브 Challenge(1190,640) -> World Tour 카드(795,450) -> Start Race(1080,662)
     //   -> MsgBattleMatchReq (상대·트랙) -> 매칭 화면 카운트다운 뒤 자동 MsgBattleStartReq {RaceType 4} -> 대화 -> 주행 -> MsgBattleResultReq
     //   하루 시도 횟수(LeftTry 7)와 Big Race Ticket 1장씩 사용. 루프에서 LeftTry·티켓을 확인하고 들어온다
-    await page.mouse.click(1190, 640); await sleep(7000);
-    await page.mouse.click(795, 450); await sleep(9000);
+    // 화면 확인: World Tour 카드를 누르면 MsgOpenWorldTourReq 가 나간다. 안 나갔으면(2026-11-05: Challenge 대신 이벤트 목록이 열림) 뒤로 가서 다시
+    let opened = false;
+    for (let k = 0; k < 3 && !opened; k++) {
+      if (k) { for (let j = 0; j < 3; j++) { await page.mouse.click(60, 25); await sleep(3000); } }
+      reqSeen.length = 0;
+      await page.mouse.click(1190, 640); await sleep(7000);
+      await page.mouse.click(795, 450); await sleep(9000);
+      opened = reqSeen.includes('MsgOpenWorldTourReq');
+      if (!opened) { log(`world tour screen not opened (try ${k + 1}): ${reqSeen.slice(-6).join(',')}`); await shot('wt-fail'); }
+    }
+    if (!opened) return 'noresult';
     await evalJ(DRIVER); await evalJ('window.__botSmart = true; window.__botLead = 0; window.__botLeadEnd = 0');
     tp('map'); await shot('last-panel');
     lastResult = null; raceStartAt = 0;
+    reqSeen.length = 0;
     await page.mouse.click(1080, 662); await sleep(15000);
+    if (!reqSeen.includes('MsgBattleMatchReq')) { log(`world tour match not requested: ${reqSeen.join(',')}`); await shot('wt-fail'); return 'noresult'; }
     return await finishRace(t, tp, phases);
   }
   if (t.mode === 'event' || t.mode === 'weekly') {

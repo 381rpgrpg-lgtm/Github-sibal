@@ -282,6 +282,48 @@ register('MsgSellGirlItemReq', (body, ctx): Msg[] => {
   ];
 });
 
+// ── 코팅 MsgCarCoatingReq {CarInfo: 차량, Randtype 1 코인 | 2 캐시(스킬 종류 고정, 수치만)}
+//   실기록 2026-11-05 (차량 8, 데칼 104): 코인 8,000 -> 스킬 14 값 2, CoatingCount 1, 다음 CoatingCoin 12,000 / 12,000 -> 스킬 9 값 11, Count 2, 다음 16,000.
+//   응답 {Seq, Result 1, UserInfo, CarInfo(CoatingSkill, CoatingValue, CoatingCount, CoatingTime 지금, CoatingCoin 다음 비용)}.
+//   비용 = vconst coatingCoin[오늘 횟수] (8000, 12000, 16000, 20000, ...; 안내문: '매일 0시에 초기화'), 캐시 방식 추가 비용 vconst coatingCash 25.
+//   스킬은 decals.json CoatingInfo 의 Skillrate 가중치로 뽑고 값은 [Skillvaluemin, Skillvaluemax] 균등 (추정: 표본 2건).
+//   데칼이 없는 차량(DecalIndex -1)은 클라이언트가 막는다 -> Result 2. 일일 초기화 기준은 다른 일일 항목처럼 UTC 날짜로 둔다 (추정).
+register('MsgCarCoatingReq', (body, ctx): Msg[] => {
+  const snap = ctx.store.getUser(uid(ctx));
+  const fail = (Result: number, why: string): Msg[] => {
+    console.warn(`[misc2] 코팅 거절: ${why} ${JSON.stringify(body).slice(0, 160)}`);
+    return [{ name: 'MsgCarCoatingAns', body: { Seq: 1, Result, ...(snap ? { UserInfo: snap.UserInfo } : {}) } }];
+  };
+  if (!snap) return fail(R_FAIL, '계정 없음');
+  const car = findCar(snap, body?.CarInfo?.Carid);
+  if (!car) return fail(R_FAIL, '차량 없음');
+  if (Number(car.DecalIndex ?? -1) === -1) return fail(R_FAIL, '데칼 없음');
+  const vc = (n: string) => (table('vconstTable.json')?.Vconst ?? []).find((v: any) => v.Name === n);
+  const steps: number[] = vc('coatingCoin')?.Val ?? [8000, 12000, 16000, 20000, 25000];
+  const today = new Date().toISOString().slice(0, 10);
+  const day = (snap.coatingDay ??= {});
+  if (day.date !== today) { day.date = today; day.n = {}; }
+  const n = Number(day.n[car.Carid] ?? 0);
+  const coin = steps[Math.min(n, steps.length - 1)];
+  const cashMode = Number(body?.Randtype) === 2;
+  const cash = cashMode ? Number(vc('coatingCash')?.Dval) || 25 : 0;
+  const ui = snap.UserInfo;
+  if ((Number(ui.Coin) || 0) < coin) return fail(R_NO_COIN, '코인 부족');
+  if ((Number(ui.Cash) || 0) < cash) return fail(R_NO_CASH, '캐시 부족');
+  const skills: any[] = table('decals.json')?.CoatingInfo ?? [];
+  let sk = cashMode ? skills.find((x) => Number(x.Skillnum) === Number(car.CoatingSkill)) : null;
+  if (!sk) { const tot = skills.reduce((a, x) => a + (Number(x.Skillrate) || 0), 0); let r = Math.random() * tot;
+    sk = skills.find((x) => (r -= Number(x.Skillrate) || 0) < 0) ?? skills[skills.length - 1]; }
+  if (!sk) return fail(R_FAIL, '코팅 표 없음');
+  const lo = Number(sk.Skillvaluemin) || 1, hi = Number(sk.Skillvaluemax) || lo;
+  ui.Coin = Number(ui.Coin) - coin; ui.Cash = (Number(ui.Cash) || 0) - cash;
+  day.n[car.Carid] = n + 1;
+  Object.assign(car, { CoatingSkill: Number(sk.Skillnum), CoatingValue: lo + Math.floor(Math.random() * (hi - lo + 1)),
+    CoatingCount: (Number(car.CoatingCount) || 0) + 1, CoatingTime: Date.now() / 1000, CoatingCoin: steps[Math.min(n + 1, steps.length - 1)] });
+  ctx.store.putUser(uid(ctx), snap);
+  return [{ name: 'MsgCarCoatingAns', body: { Seq: 1, Result: R_OK, UserInfo: ui, CarInfo: car } }];
+});
+
 // ── 차량 꾸미기 MsgCustomizeCarReq {CarInfo:[{Carid, PlateName | ColorIndex | DecalIndex}]}
 //   클라이언트 SSCarCustomize: 번호판은 이 메시지로 보낸다(3~12자, forbiddenNames 검사), 비용 = 코인 차종 Grade² x 200 (#M8 plateCost).
 //   색상·데칼은 클라이언트가 MsgUseItemReq{Item, CarInfo} 로 보낸다(items.ts 담당) — 여기서는 혹시 오는 경우만 받는다 (추정):
