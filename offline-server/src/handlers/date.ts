@@ -256,8 +256,8 @@ register('MsgDateStartReq', (body, ctx): Msg[] => {
     })) : null;
   const events = moodChunk ? [mood!.event] : [];
   if (!tutorial && Number(g.Emotion) === 1 && scriptRows(girl, 'Date_Peevish', lv).length) {
-    // 삐친 캐릭터와의 데이트 (실기록 2026-11-05, 20101 원인 11): 대본 [Date_Peevish(CHANGE [장소, 캐릭터, SYSTEM, face_peevish, 장소 소리]),
-    //   Date_End_Peevish, {장소 대본 Index 1, Index 2}], 문항 없음. Index 1 -> 만족도 1(친밀도 x0.5), Index 2 -> 결과에서 기분 0·원인 0 (풀림)
+    // 삐친 캐릭터와의 데이트 (실기록 2026-11-05, 20101·20303 원인 11): 대본 [Date_Peevish(CHANGE [장소, 캐릭터, SYSTEM, face_peevish, 장소 소리]),
+    //   Date_End_Peevish, {장소 대본 Index 1, Index 2}], 문항 없음. Index 1 -> 만족도 3(싫어하는 장소면 1), Index 2 -> 결과에서 기분 0·원인 0 (풀림)
     const fix = (r: any) => { const o = toIns(r);
       if (o.Function === 'CHANGE' && o.Parameter) {
         if (o.Parameter[0] === 'ND') o.Parameter[0] = String(place.Id);
@@ -377,7 +377,10 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
   if (depth === 0 && index === st.resultIndex) {
     // 만족도 = 3 + 좋아한 답 - 싫어한 답 (실기록 2026-11-05 통제 실험 포함: 좋아함 2 -> 5 (28/29건), 싫어함 2 -> 1 (5/5건, 20405 lv3).
     //   예전 기록 해석 '좋아함 1·싫어함 1 -> 4' 는 1건뿐이라 3 으로 둔다(추정). 문항 없는 데이트는 3)
-    const sat = st.peevish ? 1 : Math.max(1, Math.min(5, 3 + st.likes - st.dislikes));
+    // 싫어하는 장소(girlTable DislikePlace)는 -2: 20101 의 대학(42071) 데이트 — 문항 없는 2건 1, 삐친 상태 데이트 1. 같은 삐친 데이트라도
+    //   20303 노래방(보통 장소)은 3 (2026-11-05). 삐친 데이트는 문항이 없어 3 + 장소 보정. 선호 장소 가산은 미확인
+    const placeAdj = Number(gdef(st.girl)?.DislikePlace) === st.place ? -2 : 0;
+    const sat = Math.max(1, Math.min(5, 3 + (st.peevish ? 0 : st.likes - st.dislikes) + placeAdj));
     st.satisfaction = sat;
     const delta = Math.round((Number(place.Familiarity) || 0) * MULT[sat]);
     const firstAtPlace = !(g.DatingState ?? []).some((x: any) => Number(x.Placeid) === st.place);
