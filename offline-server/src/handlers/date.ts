@@ -350,8 +350,8 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
     if (index === 2) {
       const ev = eventChunk(st.girl, st.lv, Number(g.Familiarity) || 0, false, 5);
       if (ev) { chunks.push(ev.chunk); (st.events ??= []).push(ev.name); if (ev.gift) st.gift = true; else if (ev.ask) st.chat = ev.name; }
-      // 종료 대본 (실기록 3건: 좋아함 0 -> Basic, 좋아함 1 -> Basic 1건·Good 1건. 추정: 2개 Good, 1개 Good/Basic 반반, 0개 Basic. Bad 는 미관측)
-      st.end = st.likes >= 2 ? 'Date_End_Good' : st.likes === 1 ? (Math.random() < 0.5 ? 'Date_End_Good' : 'Date_End_Basic') : 'Date_End_Basic';
+      // 종료 대본 (실기록: 좋아함 0 -> Basic, 좋아함 1 -> Basic 1건·Good 1건, 싫어함 2 -> Bad (2026-11-05 5건). 추정: 2개 Good, 1개 Good/Basic 반반)
+      st.end = st.dislikes >= 2 ? 'Date_End_Bad' : st.likes >= 2 ? 'Date_End_Good' : st.likes === 1 ? (Math.random() < 0.5 ? 'Date_End_Good' : 'Date_End_Basic') : 'Date_End_Basic';
       if (!scriptRows(st.girl, st.end, st.lv).length) st.end = 'Date_End_Basic';
       chunks.push(chunk(st.girl, st.end, st.lv, scriptRows(st.girl, st.end, st.lv).map((r) => toIns(r))));
     }
@@ -361,9 +361,9 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
 
   // 결과
   if (depth === 0 && index === st.resultIndex) {
-    // 만족도 = 3 + 좋아한 답 수 (실기록 4건: 좋아함 1·싫어함 1 -> 4, 좋아함 1·싫어함 1·선물 -> 4, 싫어함 2 -> 3, 문항 없음 -> 3.
-    //   싫어한 답과 채팅 답은 만족도를 바꾸지 않는다. 1·2 는 삐침·차량 등에서 나오는 것으로 추정)
-    const sat = Math.max(1, Math.min(5, 3 + st.likes));
+    // 만족도 = 3 + 좋아한 답 - 싫어한 답 (실기록 2026-11-05 통제 실험 포함: 좋아함 2 -> 5 (28/29건), 싫어함 2 -> 1 (5/5건, 20405 lv3).
+    //   예전 기록 해석 '좋아함 1·싫어함 1 -> 4' 는 1건뿐이라 3 으로 둔다(추정). 문항 없는 데이트는 3)
+    const sat = Math.max(1, Math.min(5, 3 + st.likes - st.dislikes));
     st.satisfaction = sat;
     const delta = Math.round((Number(place.Familiarity) || 0) * MULT[sat]);
     const firstAtPlace = !(g.DatingState ?? []).some((x: any) => Number(x.Placeid) === st.place);
@@ -418,10 +418,21 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
       if (!m) { m = { Id: Number(def.Id), FmFlag: 0, RewardState: 2, MemoryName: def.Girlscript ?? n }; gm.Memory.push(m); }
       m.FmFlag = (Number(m.FmFlag) || 0) | (1 << (st.lv - 1));
     }
-    // 기분: 만족도 4 이상이면 3(즐거움), 아니면 즐거움이 풀려 0 (실기록 20101·20102 만족도 4 -> 3, 20105 만족도 3 -> 0).
-    //   삐침(2)은 미구현: 기록 1건(20105, 싫어하는 답 2개 데이트 뒤 2)뿐이고 PeevishCondition/Value 규칙이 서버 전용.
+    // 기분(Emotion: 0 보통, 1 삐침, 2 화남(차단), 3 즐거움 — 클라이언트 열거형). 실기록 전이(이전, 만족도 -> 이후), 2026-11-05 실험 포함:
+    //   보통: 4·5 -> 즐거움(12건), 1·3 -> 보통(6건) / 즐거움: 3·4·5 -> 즐거움(66건), 2 -> 보통(5건), 1 -> 보통(문항 없음 1건)
+    //   싫어한 답이 있는 만족도 1 데이트 -> 화남 (즐거움 -> 화남 1건, 화남 유지 4건; 클라이언트 안내 '다른 대답을 해 보세요')
+    //   화남: 3·5 -> 보통 (2건). 백화점 데이트(만족도 0)는 그대로. 삐침(1)은 서버 주기 판정(girlTable PeevishCondition/Value) — 미구현, 그대로 둔다.
+    //   추정: 싫어함 1개로 만족도 2 가 된 경우도 화남, 화남에서 4 -> 보통
+    {
+      const e = Number(g.Emotion) || 0;
+      if (e !== 1 && sat > 0) {
+        if (sat <= 2 && st.dislikes > 0) g.Emotion = 2;
+        else if (e === 2) g.Emotion = sat >= 3 ? 0 : 2;
+        else if (e === 3) g.Emotion = sat >= 3 ? 3 : 0;
+        else g.Emotion = sat >= 4 ? 3 : 0;
+      }
+    }
     //   CauseOfPeevish·SolutionForPeevish(0) 는 기분이 0 이 아니게 될 때 레코드에 생긴다 (실기록: 기분 3·2 결과에만 있음)
-    if (Number(g.Emotion) !== 1 && Number(g.Emotion) !== 2) g.Emotion = sat >= 4 ? 3 : 0;
     if (Number(g.Emotion) !== 0) { g.CauseOfPeevish ??= 0; g.SolutionForPeevish ??= 0; }
     // 첫 데이트 후 관계도 다음 노드 개방
     const patch: any[] = [];
