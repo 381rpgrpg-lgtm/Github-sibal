@@ -42,7 +42,10 @@ function stateValue(snap: any, o: any): number | null {
   switch (Number(o.Type)) {
     case 2: if (p[1] && p[2]) return raceWon(snap, Number(p[1]), Number(p[2])) ? 1 : 0; return null;
     case 5: return myGirl(snap, girlId(snap, p[1])) ? 1 : 0;
-    case 7: { const g = myGirl(snap, girlId(snap, p[1])); return g && famLevel(Number(g.Girlid), Number(g.Familiarity) || 0) >= Number(p[3] || 1) ? 1 : 0; }
+    // 7: [1, 캐릭터, 목표 등급] = 한계 돌파 등급 (10802 '클로디아를 한계돌파 해 2등급'), [1, 캐릭터, '', 단계]·[1, 캐릭터, 1, 1, 단계] = 호감도 단계
+    case 7: { const g = myGirl(snap, girlId(snap, p[1])); if (!g) return 0;
+      if (p.length === 3) return (Number(g.Rarity) || 1) >= Number(p[2] || 1) ? 1 : 0;
+      return famLevel(Number(g.Girlid), Number(g.Familiarity) || 0) >= Number(p[p.length - 1] || 1) ? 1 : 0; }
     case 16: return cars.filter((c) => carGrade(c) >= Number(p[2] || 1) && Number(c.UpgradeLevel) >= Number(p[3] || 1)).length;
     case 18: return cars.filter((c) => carGrade(c) >= Number(p[1] || 1)).length;
     case 26: { const cur = cars.find((c) => Number(c.Carid) === Number(snap.UserInfo?.Currentcar)); return cur && carGrade(cur) >= Number(p[2] || 1) ? 1 : 0; }

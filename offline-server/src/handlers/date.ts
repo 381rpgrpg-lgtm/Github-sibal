@@ -20,11 +20,11 @@
 //   - 문항별 '좋아하는 답'은 src/data/date-answers.json (반응 대사 비교로 만든 표, 기록 2문항 일치)
 //   - 만족도 = 3 + 좋아함 - 싫어함 + 채팅(Best 2 / Good 1 / Pass 0), 1..5. 배율 1:0.5 2:0.75 3:1 4:1.25 5:1.5
 //   - 종료 대본: 좋아함>싫어함 Good, 같으면 Basic, 적으면 Bad. 채팅 이벤트는 조건(ChatConditionA..C) 충족 중 무작위(튜토리얼은 A)
-//   - 백화점(DateType 3) 등 장소 외 데이트는 미구현 (Result 2).
+//   - 백화점(DateType 3) 데이트는 아래 departmentStart/departmentProgress.
 import { readFileSync, existsSync } from 'node:fs';
 import { register, type Msg, type Ctx } from '../rpc.js';
 import { bumpProperty, levelUp } from './battle.js';
-import { ensureGirl } from './girls.js';
+import { ensureGirl, expansionReady } from './girls.js';
 import { evalGirlUnlocks } from '../girlunlock.js';
 import { refreshQuests, questEvent } from '../quests.js';
 
@@ -216,7 +216,8 @@ register('MsgDateStartReq', (body, ctx): Msg[] => {
   if (!snap) return fail('계정 없음');
   const g = myGirl(snap, body?.GirlInfo?.Girlid);
   if (!g) return fail('보유하지 않은 캐릭터');
-  if (Number(body?.DateType) === 3) return departmentStart(snap, g, ctx);
+  // 백화점: 튜토리얼 기록은 DateType 3, 일반 기록(2026-11-05, 클라이언트 OnClickDept)은 장소 없이 {GirlInfo:{Girlid}} 만 보낸다
+  if (Number(body?.DateType) === 3 || body?.DatePlace === undefined) return departmentStart(snap, g, ctx);
   const place = places!.get(Number(body?.DatePlace));
   if (!place) return fail(`장소 데이트가 아님 (DateType ${body?.DateType ?? '-'}: 백화점 등은 실서버 기록이 더 필요해 미구현)`);
   const ui = snap.UserInfo;
@@ -473,7 +474,10 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
 //   Depth 1 Index 3 -> {GiftForGirl {Girlid, GiftIndex 5, Count 1}, GirlInfo {Girlid, Familiarity, DeltaFamiliarity}}
 //   Index 2 -> DateResultAns {GirlInfo(DateCoolTime +30초), UserInfo, GgraphPatch [], CallScript [], UpdateGirlInfo [], GirlMemorySet}
 //     기억: Date_Department, Date_Event_Shopping_B (FmFlag 단계 비트), 아이템 {Id: 아이템, RewardState 1}
-// 추정(기록 없음): 선물 1~4 (가격 PresentPriceN 코인, 친밀도 합산, Shopping_A 대본, 아이템 없음), 아이쇼핑(0: EyeShoppingFamiliarity/XP,
+// 실기록 2026-11-05 (20404, 튜토리얼 아님): 선물 1~4 동시(15) -> 코인 -5,800, 친밀도 +720, 액세서리 4개 지급·장착, 대본 Date_Event_Shopping_A
+//   (UNLOCK [캐릭터, ACC], CHANGE [40017, 캐릭터, SYSTEM, face_joyful], POPUP GIFT Index 3), 결과 DateCoolTime +30초.
+//   선물 5(64) -> 코인 -PresentPrice5(7,540), 친밀도 +720, 82511(DR_hidden_001) 지급, SpecialDressSlot = ItemId, Shopping_B.
+// 추정(기록 없음): 아이쇼핑(0: EyeShoppingFamiliarity/XP,
 //   Date_Event_Eyeshopping), 튜토리얼 외 선물 5 가격 차감, 여러 선물 동시 구매 시 GiftIndex(가장 높은 번호)·Count(개수).
 const TUT_DEPARTMENT = 536870912;
 const DEPT_PLACE = '40017';
@@ -522,6 +526,21 @@ function departmentProgress(snap: any, g: any, st: DateState, body: any, head: a
         return [{ name: 'MsgScriptProgressAns', body: { ...head, Result: 3, UserInfo: ui } }];
       }
       ui.Coin -= cost.Coin; ui.Cash -= cost.Cash; ui.SocialPoint = (Number(ui.SocialPoint) || 0) - cost.SocialPoint;
+      // 선물 1~4 = 그 캐릭터 전용 액세서리 (girlItemTable SellPrice<0, Id%100 == 40+i). 실기록 2026-11-05 20404 AnswerSelect 15:
+      //   82541(Slot 6)·82542(5)·82543(7)·82544(8) 지급, 코인 -5,800 (500+1100+1800+2400), 친밀도 +720 (PresentFamiliarityRise 180 x4,
+      //   친밀도 4290 > PresentFamiliarityCap 3960 이어도 올랐다), 빈 칸이면 바로 장착 (Slot 5..8 -> AccessorySlot1..4 = ItemId).
+      const girlItems = (table('girlItemTable.json')?.GirlItemInfo ?? []).filter((x: any) => Number(x.GirlId) === girl);
+      for (const i of picked.filter((k) => k >= 1 && k <= 4 && !(Number(g.ItemFlag) & GIFT_FLAGS[k]))) {
+        const acc = girlItems.find((x: any) => Number(x.SellPrice) < 0 && Number(x.Id) % 100 === 40 + i);
+        if (!acc) continue;
+        snap.GirlItems ??= { GirlItemInfo: [], Version: 1 };
+        const list = snap.GirlItems.GirlItemInfo ??= [];
+        const itemId = list.reduce((m: number, x: any) => Math.max(m, Number(x.ItemId) || 0), 0) + 1;
+        const it = { ItemId: itemId, ItemType: Number(acc.Id), StackNum: 1 };
+        list.push(it); items.push(it);
+        const slotKey = `AccessorySlot${Number(acc.Slot) - 4}`;
+        if (Number(acc.Slot) >= 5 && Number(acc.Slot) <= 8 && !(Number(g[slotKey]) > 0)) { g[slotKey] = itemId; extraGirl.AppearanceChanged = true; }
+      }
       g.ItemFlag = picked.reduce((f, i) => f | GIFT_FLAGS[i], Number(g.ItemFlag) || 0);
       name = picked.includes(5) ? 'Date_Event_Shopping_B' : 'Date_Event_Shopping_A';
       if (picked.includes(5)) {
@@ -544,15 +563,23 @@ function departmentProgress(snap: any, g: any, st: DateState, body: any, head: a
     syncGirl(g);
     if (xp) { ui.Charexp = (Number(ui.Charexp) || 0) + xp; levelUp(snap); }
     st.dept!.scripts.push(name);
-    const dressType = items[0]?.ItemType;
+    // CHANGE 의 3번째 인자는 선물 5 드레스만 (Shopping_A 기록은 'SYSTEM' 그대로)
+    const dressType = picked.includes(5) ? items[items.length - 1]?.ItemType : undefined;
     const ins = scriptRows(girl, name, lv).map((r) => {
       const o = toIns(r, r.Function === 'POPUP' ? { Index: 3 } : {});
       if (o.Function === 'CHANGE' && o.Parameter) { o.Parameter[0] = DEPT_PLACE; if (dressType) o.Parameter[2] = String(dressType); }
       return o;
     });
+    // 한계 돌파 조건이 다 갖춰지면(수영복 구입 등) 알림 목록에 넣는다 (실기록 0084: GirlRarityExpandId [20404])
+    let rxIds: number[] | null = null;
+    if (expansionReady(snap, g) && !(snap.GirlRarityExpandId ?? []).map(Number).includes(girl)) {
+      snap.GirlRarityExpandId = [...(snap.GirlRarityExpandId ?? []), girl];
+      rxIds = snap.GirlRarityExpandId;
+    }
     save();
     return [{ name: 'MsgScriptProgressAns', body: { Seq: 1, Index: index, ...(items.length ? { GirlItemInfo: items } : {}),
-      Script: { Chunk: [chunk(girl, name, lv, ins)] }, UserInfo: ui, GirlInfo: { ...g, DeltaFamiliarity: delta, ...extraGirl } } }];
+      Script: { Chunk: [chunk(girl, name, lv, ins)] }, UserInfo: ui, GirlInfo: { ...g, DeltaFamiliarity: delta, ...extraGirl },
+      ...(rxIds ? { GirlRarityExpandId: rxIds } : {}) } }];
   }
   if (depth === 1 && index === 3) {
     const gift = st.dept!.gift;
@@ -566,7 +593,10 @@ function departmentProgress(snap: any, g: any, st: DateState, body: any, head: a
     let gm = snap.GirlMemorySet.GirlMemory.find((x: any) => Number(x.Girlid) === girl);
     if (!gm) { gm = { Girlid: girl, Memory: [] }; snap.GirlMemorySet.GirlMemory.push(gm); }
     // 기록 순서: 받은 아이템 {Id, RewardState 1} 이 대본 기억보다 먼저
+    //   이 캐릭터의 아이템만 (2026-11-05 재생 비교: 다른 캐릭터 수영복 80511 이 끼어들던 문제)
+    const ownDefs = new Set((table('girlItemTable.json')?.GirlItemInfo ?? []).filter((x: any) => Number(x.GirlId) === girl).map((x: any) => Number(x.Id)));
     for (const it of snap.GirlItems?.GirlItemInfo ?? []) {
+      if (!ownDefs.has(Number(it.ItemType))) continue;
       if (!gm.Memory.some((x: any) => Number(x.Id) === Number(it.ItemType))) gm.Memory.push({ Id: Number(it.ItemType), RewardState: 1 });
     }
     for (const n of st.dept!.scripts) {
