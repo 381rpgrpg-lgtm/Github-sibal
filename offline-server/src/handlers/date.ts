@@ -494,8 +494,9 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
 // 실기록 2026-11-05 통제 실험: 20101(조건 11 '라이벌과 잦은 데이트', 값 10, RivalGirl 20102). 20101 의 마지막 데이트 뒤
 //   20102 와 데이트 10회째(이전 2 + 실험 8) 결과에서 20101 이 기분 1·CauseOfPeevish 11·SolutionForPeevish 11 이 되었고,
 //   그 데이트의 MsgDateResultAns.UpdateGirlInfo 에 20101 레코드 전체가 실렸다. 20101 과 데이트하자 풀림(위 st.peevish).
-//   센 값은 snap.peevishCount[캐릭터][조건] (그 캐릭터와 데이트하면 0). 조건 13('다른 아가씨와 잦은 데이트')은 11 과 같은 방식으로 추정.
-//   그 밖의 조건(1 불만족 데이트, 9 레이스만, 10 데이트만, 12 라이벌 동승 등)은 미확인 — 2026-11-05 실험: 싫어한 답 데이트 5회(조건 1, 값 5)는
+//   센 값은 snap.peevishCount[캐릭터][조건] (그 캐릭터와 데이트하면 0).
+//   조건 13('다른 아가씨와 잦은 데이트')은 같은 방식이 아니다: 기록상 20206(13, 값 45)은 자기 마지막 데이트 뒤 다른 캐릭터 데이트 62회에도 삐치지 않았다.
+//   그 밖의 조건(1 불만족 데이트, 9 레이스만, 10 데이트만, 12 라이벌 동승, 13 등)은 미확인 — 2026-11-05 실험: 싫어한 답 데이트 5회(조건 1, 값 5)는
 //   삐침이 아니라 화남(2)만 되었다.
 function rivalPeevish(snap: any, dated: number): any[] {
   const cnt: Record<string, Record<string, number>> = (snap.peevishCount ??= {});
@@ -507,7 +508,7 @@ function rivalPeevish(snap: any, dated: number): any[] {
     const def = gdef(id); if (!def) continue;
     for (const n of [1, 2, 3]) {
       const cond = Number(def[`PeevishCondition${n}`]) || 0, val = Number(def[`PeevishValue${n}`]) || 0;
-      if (!val || !((cond === 11 && Number(def.RivalGirl) === dated) || cond === 13)) continue;
+      if (!val || !(cond === 11 && Number(def.RivalGirl) === dated)) continue;
       const c = (cnt[id] ??= {});
       c[cond] = (c[cond] ?? 0) + 1;
       if (c[cond] >= val && Number(y.Emotion) !== 1) {
