@@ -6,11 +6,17 @@
 const { chromium } = require('playwright');
 const fs = require('fs');
 const OUT = process.argv[2];
-// 2026-11-06: a date that ends with DateResult 0 (no familiarity, coins still spent: 100~3200) was retried at once -
-//   the same girl failed 3x in a row. A girl whose date ended with final 0 is skipped for 3 h.
-const DATE_FAIL_F = () => `${OUT}/date-fail.json`;
-function dateFailed(g) { try { const j = JSON.parse(fs.readFileSync(DATE_FAIL_F(), 'utf8')); return Date.now() - (j[g] ?? 0) < 3 * 3600e3; } catch { return false; } }
-function markDateFail(g, line) { if (!/"final":0/.test(line)) return; let j = {}; try { j = JSON.parse(fs.readFileSync(DATE_FAIL_F(), 'utf8')); } catch {} j[g] = Date.now(); try { fs.writeFileSync(DATE_FAIL_F(), JSON.stringify(j)); } catch {} }
+// 2026-11-06 date results of 0 (relay records): two causes.
+//   refusal  - the place's own script for that girl and familiarity level ends in BREAK (20402 / 20301: Date_Bar, Date_Casino,
+//              Date_VIPClub at levels 1-4). Coins are spent (bar 2400) and nothing is gained -> never pick those places.
+//   event    - a story chat (Date_Event_Chat_*) replaces the date and ends in BREAK. No familiarity, but it unlocks girl
+//              memories with claimable rewards -> normal progress, do not avoid it.
+const DATE_REFUSE = (() => { const set = new Set(); try { const rows = JSON.parse(fs.readFileSync('/home/user/Github-sibal/offline-server/data/scripts.json', 'utf8'));
+  for (const r of (Array.isArray(rows) ? rows : Object.values(rows).find(Array.isArray) || [])) if (r.Function === 'BREAK' && /^Date_/.test(r.ScriptName) && !/^Date_(Event|End|Boring|Start|Special)/.test(r.ScriptName)) set.add(`${r.Id}|${r.ScriptName}|${r.FamiliarityLv}`); } catch {} return set; })();
+const placeRefused = (g, scriptName, lv) => DATE_REFUSE.has(`${g}|${scriptName}|${lv}`) || DATE_REFUSE.has(`${g}|${scriptName}|-1`);
+const DATE_FAIL_F = () => `${OUT}/date-fail.json`; // per girl|place refusals seen live (safety net for scripts the table misses)
+function dateFailed(g, place) { try { const j = JSON.parse(fs.readFileSync(DATE_FAIL_F(), 'utf8')); return Date.now() - (j[`${g}|${place}`] ?? 0) < 24 * 3600e3; } catch { return false; } }
+function markDateFail(g, place, line) { if (!/"refused":"/.test(line)) return; let j = {}; try { j = JSON.parse(fs.readFileSync(DATE_FAIL_F(), 'utf8')); } catch {} j[`${g}|${place}`] = Date.now(); try { fs.writeFileSync(DATE_FAIL_F(), JSON.stringify(j)); } catch {} }
 const HOURS = Number(process.argv[3] || 20);
 const B = 'http://localhost:8080';
 const DRIVER = fs.readFileSync(__dirname + '/driver4.js', 'utf8');
@@ -342,14 +348,14 @@ async function manage() {
     const dqAll = (ud.PropertySet?.Property ?? []).find((p) => p.PropertyName === 'DQUEST');
     if (dqAll?.Nvalue === 1 && (dqd?.Nvalue ?? 0) < 3 && ud.UserInfo.Coin > 2000) {
       const open = (id) => (ud.MyGirls?.MyGirlInfo ?? []).find((g) => g.Girlid === id && g.State === 7);
-      const girls = [20302, 20405, 20101, 20102].filter(open).filter((g) => !dateFailed(g));
+      const girls = [20302, 20405, 20101, 20102].filter(open);
       const places = [41011, 42071, 41022];
       for (let n = dqd?.Nvalue ?? 0, i = 0; n < 3 && i < 6; i++) {
         const g = open(girls[0]); const last = Number(g?.LastDatePlace) || 0;
         const place = places.find((p) => p !== last) ?? 41011;
         const out = require('child_process').execFileSync('node', [__dirname + '/dates.cjs', String(girls[0]), String(place)], { encoding: 'utf8', timeout: 120000 });
         const line = out.trim().split('\n').pop(); act(`date ${girls[0]}@${place}: ${line.slice(0, 200)}`);
-        markDateFail(girls[0], line); if (/"final":0/.test(line)) break;
+        markDateFail(girls[0], place, line); if (/"refused":"/.test(line)) break;
         if (/DQUEST_DATE=(\d)/.test(line)) n = Number(RegExp.$1); else break;
         await sleep(35000);
         ud = pick(await rpc('MsgLoginReq'), 'MsgUserData');
@@ -394,7 +400,7 @@ async function manage() {
       for (const g of unlockDateTargets(ud)) if (!want.has(g)) want.set(g, { q: 'unlock', place: 0 });
       let n = 0;
       for (const [g, w] of want) {
-        if (n >= 3 || !open(g) || dateFailed(g)) continue;
+        if (n >= 3 || !open(g)) continue;
         const h = hist[g] ?? [], last = Number(open(g)?.LastDatePlace) || 0;
         // 특별 장소(SpecialDate, 예 고급 리조트 40016 RestrictionFamiliarity 3)는 그 호감도 단계가 되기 전에는 거절됨(Date_Special_Deny) -> 일반 장소로 호감도부터
         const sp = PL.find((x) => x.Id === w.place), gd = GIRLT.Girl.find((x) => x.Id === g), fam = Number(open(g)?.Familiarity) || 0;
@@ -408,13 +414,15 @@ async function manage() {
         const seen = new Set((open(g)?.DatingState ?? []).map((d) => Number(d.Placeid)));
         // 그 캐릭터가 그 장소에서 받은 직전 만족도(run/date-sat.json)로 가중: 1 -> x0.5 … 5 -> x1.5 (2026-11-06 조은 노래방 만족도 1 세 번, 회당 +120 vs 레스토랑 5 -> +500 안팎)
         const satF = (p) => { const s = satHist[g]?.[p]; return s == null ? 1 : [0.5, 0.5, 0.75, 1, 1.25, 1.5][Math.max(0, Math.min(5, Number(s)))]; };
-        const best = places.filter((p) => p !== last && p !== Number(gd?.DislikePlace) && (Number(PL.find((x) => x.Id === p)?.UnlockFmLevel) || 1) <= famLv(g, fam))
+        const okPlace = (p) => { const sc = PL.find((x) => x.Id === p)?.ScriptName; return !(sc && placeRefused(g, sc, famLv(g, fam))) && !dateFailed(g, p); };
+        if (w.place && !okPlace(w.place)) w.place = 0; // a quest place she refuses at this level: pick another place
+        const best = places.filter(okPlace).filter((p) => p !== last && p !== Number(gd?.DislikePlace) && (Number(PL.find((x) => x.Id === p)?.UnlockFmLevel) || 1) <= famLv(g, fam))
           .map((p) => [p, famP(p) * (p === Number(gd?.PreferencePlaceA) ? 1.5 : 1) * satF(p) + (seen.has(p) ? 0 : Number(gd?.FirstDatePlaceBonus) || 0)]).sort((a, b) => b[1] - a[1])[0]?.[0];
-        const place = w.place || best || places.find((p) => !h.includes(p) && p !== last) || places.find((p) => p !== last) || 41011;
+        const place = w.place || best || places.filter(okPlace).find((p) => !h.includes(p) && p !== last) || places.filter(okPlace).find((p) => p !== last) || 41011;
         const out = require('child_process').execFileSync('node', [__dirname + '/dates.cjs', String(g), String(place)], { encoding: 'utf8', timeout: 120000 });
         const line = out.trim().split('\n').pop(); act(`quest date ${w.q} ${g}@${place}: ${line.slice(0, 160)}`);
-        markDateFail(g, line);
-        { const fm = line.match(/"final":(\d)/); if (fm) { satHist[g] = { ...(satHist[g] ?? {}), [place]: Number(fm[1]) }; try { fs.writeFileSync(`${OUT}/date-sat.json`, JSON.stringify(satHist)); } catch {} } }
+        markDateFail(g, place, line);
+        { const fm = line.match(/"final":(\d)/); if (fm && Number(fm[1]) > 0) { satHist[g] = { ...(satHist[g] ?? {}), [place]: Number(fm[1]) }; try { fs.writeFileSync(`${OUT}/date-sat.json`, JSON.stringify(satHist)); } catch {} } }
         if (w.q === 'priority' && /"final":\d/.test(line)) { try { const pf = `${OUT}/date-priority.json`; const pj = JSON.parse(fs.readFileSync(pf, 'utf8')); pj[g] = Math.max(0, (pj[g] ?? 1) - 1); fs.writeFileSync(pf, JSON.stringify(pj)); } catch {} }
         hist[g] = [place, ...h.filter((p) => p !== place)].slice(0, Math.max(1, places.length - 1)); fs.writeFileSync(hf, JSON.stringify(hist));
         n++; await sleep(5000);

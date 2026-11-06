@@ -24,6 +24,13 @@ const pick = (ms, n) => ms.find((m) => m.name === n)?.body;
 function markers(ms, ctx) {
   const out = [];
   for (const m of ms) for (const ch of m.body?.Script?.Chunk ?? []) {
+    // 2026-11-06: DateResult 0 has two causes. (a) the place's own script ends in BREAK = the girl refuses the place at
+    //   this familiarity (20402 / 20301: bar, casino, VIP club at every level) -> coins lost, nothing gained.
+    //   (b) a story event (Date_Event_Chat_*) replaces the date and ends in BREAK -> no familiarity, but it unlocks
+    //   girl memories with claimable rewards (20202 3019, 20402 2014/3019, 20302 3020-3022). (b) is progress, not a failure.
+    if (ch.ScriptName) { ctx.chunks = ctx.chunks || []; if (!ctx.chunks.includes(ch.ScriptName)) ctx.chunks.push(ch.ScriptName);
+      if (/^Date_Event/.test(ch.ScriptName)) ctx.event = ch.ScriptName;
+      if ((ch.Instruction ?? []).some((i) => i.Function === 'BREAK') && /^Date_/.test(ch.ScriptName) && !/^Date_(Event|End|Boring|Start)/.test(ch.ScriptName)) ctx.refused = ch.ScriptName; }
     if (ch.ScriptName && ch.FamiliarityLv !== undefined && /^Date_/.test(ch.ScriptName) && !/^Date_(Event|End|Boring|Start)/.test(ch.ScriptName)) { ctx.script = ch.ScriptName; ctx.lv = ch.FamiliarityLv; }
     // GIFT(퀘스트 아이템 등)는 사건 단계(Depth 1)로 데이트가 끝나기 전에 보낸다
     //   (기록: 10603 공학 서적 {Depth 1, Index 5} -> GiftFromGirl 63005. 10701 실험 자료를 {Depth 0, Index 3} 로 종료 뒤에 보냈을 때는 받지 못함)
@@ -66,6 +73,6 @@ function markers(ms, ctx) {
     console.log(`  ${JSON.stringify(body)} -> ${JSON.stringify({ act: a?.ActionResult, res: a?.Result, reward: a?.DateReward?.DateResult })}`);
   }
   const u2 = pick(await rpc('MsgLoginReq'), 'MsgUserData'); const g2 = u2.MyGirls.MyGirlInfo.find((x) => x.Girlid === girl);
-  console.log(JSON.stringify({ girl, place, script: ctx.script, lv: ctx.lv, result, fam: `${famBefore}->${g2.Familiarity}`, coin: `${coinBefore}->${u2.UserInfo.Coin}`,
+  console.log(JSON.stringify({ girl, place, script: ctx.script, lv: ctx.lv, event: ctx.event || null, refused: ctx.refused || null, result, fam: `${famBefore}->${g2.Familiarity}`, coin: `${coinBefore}->${u2.UserInfo.Coin}`,
     dq: (u2.PropertySet?.Property ?? []).filter((x) => /DQUEST/.test(x.PropertyName)).map((x) => x.PropertyName + '=' + x.Nvalue).join(' ') }));
 })();
