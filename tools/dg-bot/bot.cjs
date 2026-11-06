@@ -690,6 +690,7 @@ async function openGame() {
     if (u.pathname === '/api/rpc' && raceStartAt) {
       const pd = r.request().postData() || '';
       if (pd.includes('"MsgBattleResultReq"')) {
+        globalThis.__resultReqAt = Date.now(); // the result is on its way (maybe held): no dialogue tapping
         try { const b = JSON.parse(pd).body; const need = raceStartAt + ((Number(b.TimeRecord) || 40) + 8) * 1000 - Date.now();
           if (need > 0) { log(`hold result ${Math.round(need / 1000)}s`); await sleep(need); } } catch {}
       }
@@ -873,6 +874,7 @@ async function playRace(t) {
   return await finishRace(t, tp, phases);
 }
 async function finishRace(t, tp, phases) {
+  globalThis.__resultReqAt = 0;
   // 시작 전 대화 넘기기
   for (let i = 0; i < 60; i++) {
     const st = await evalJ('JSON.stringify(globalThis.__dgRace ? {s: __dgRace.raceState, c: __dgRace.countdown} : null)').then(JSON.parse).catch(() => null);
@@ -891,7 +893,7 @@ async function finishRace(t, tp, phases) {
     }
     // 주행이 끝났는데 결과 요청이 없으면 경기 후 대화가 막고 있는 것: 넘김(▶)을 누른다
     //   (2026-11-06 3103-30 Time Attack: 시작 10:04, 이후 니콜 대화 'You've already got this.' 화면에서 12분 멈춤, 결과 요청 없음)
-    if (raceStartAt) {
+    if (raceStartAt && !globalThis.__resultReqAt) {
       const st = await evalJ('globalThis.__dgRace ? __dgRace.raceState : -1').catch(() => -1);
       if (st !== 2) { if (!globalThis.__raceEndAt) globalThis.__raceEndAt = Date.now();
         else if (Date.now() - globalThis.__raceEndAt > 8000 && i % 6 === 0) { await page.mouse.click(1240, 672); if (!globalThis.__dlgLogged) { log(`after race: no result yet (state ${st}), tapping dialogue`); globalThis.__dlgLogged = 1; } } }
