@@ -155,6 +155,12 @@ function eventChunk(girl: number, lv: number, fam: number, tutorial: boolean, qI
 const hasQuestions = (girl: number, sname: string, lv: number) => questionIns(girl, sname, lv, 1, 1).length > 0;
 /** 장소 선호 (girlTable PreferencePlaceA / DislikePlace). 실기록: 20105 영화관 = 선호 -> 시작 대본 CHANGE 뒤 DATE_NOTICE date_notice_7
  *  ['1.5','2'] + Date_Event_Preference_A 덩어리. 싫어하는 장소는 date_notice_9 + Date_Event_Npreferred (추정: 기록 없음) */
+/** 호감도 최대치 = girlTable FamiliaritySection1~3 합 (예 20208: 700+1400+3400 = 5500) */
+export function famMax(girl: number): number {
+  const d = girls!.get(girl) ?? gdef(girl) ?? {};
+  return (Number(d.FamiliaritySection1) || 0) + (Number(d.FamiliaritySection2) || 0) + (Number(d.FamiliaritySection3) || 0);
+}
+
 function placeMood(girl: number, placeId: number, lastPlace = 0): { notice: any; event: string } | null {
   const d = girls!.get(girl) ?? {};
   // 직전과 같은 장소 (실기록 20101 공원 연속): date_notice_8 ['1.5','3'] + Date_Boring. vconst IgnoreSameDatePlace 장소는 제외.
@@ -382,9 +388,18 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
     const placeAdj = Number(gdef(st.girl)?.DislikePlace) === st.place ? -2 : 0;
     const sat = Math.max(1, Math.min(5, 3 + (st.peevish ? 0 : st.likes - st.dislikes) + placeAdj));
     st.satisfaction = sat;
-    const delta = Math.round((Number(place.Familiarity) || 0) * MULT[sat]);
+    let delta = Math.round((Number(place.Familiarity) || 0) * MULT[sat]);
     const firstAtPlace = !(g.DatingState ?? []).some((x: any) => Number(x.Placeid) === st.place);
-    const bonus = firstAtPlace ? Number(gdef(st.girl)?.FirstDatePlaceBonus) || 0 : 0;
+    let bonus = firstAtPlace ? Number(gdef(st.girl)?.FirstDatePlaceBonus) || 0 : 0;
+    // FM 부스트 (girls.ts MsgFMBoostReq): 남은 목표치(BoostFamiliarity)로 바로 오르고, 목표가 다 쓰였으면 최대치로 간 뒤 부스트 끝.
+    //   실기록 2026-11-06 20208: 2987 -> 3825 (목표 [3825, 4662] 의 첫째, DeltaFamiliarity 838), 응답 GirlInfo.FmBoost.BoostFamiliarity [4662]
+    const fb = g.FmBoost;
+    if (fb && Number(fb.FmBoostStartRarity) === Number(g.Rarity)) {
+      const cur = Number(g.Familiarity) || 0;
+      const tgt = Array.isArray(fb.BoostFamiliarity) && fb.BoostFamiliarity.length ? Number(fb.BoostFamiliarity.shift()) : famMax(st.girl);
+      if (!(fb.BoostFamiliarity?.length) && tgt >= famMax(st.girl)) delete g.FmBoost; // 마지막 데이트 뒤 부스트 끝 (추정: 끝난 뒤 필드 삭제)
+      if (tgt > cur + delta + bonus) { delta = tgt - cur; bonus = 0; }
+    }
     st.end ??= 'Date_End_Basic';
     (st as any).firstDate = (Number(g.NthDate) || 0) === 0;
     g.Familiarity = (Number(g.Familiarity) || 0) + delta + bonus;

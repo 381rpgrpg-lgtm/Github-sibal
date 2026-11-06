@@ -168,7 +168,7 @@ register('MsgNquestObjectiveClearReq', (body, ctx): Msg[] => {
   const snap = ctx.store.getUser(uid(ctx));
   const fail = (Result: number, why: string): Msg[] => {
     console.warn(`[misc2] 퀘스트 목표 캐시 완료 거절: ${why} ${JSON.stringify(body)}`);
-    return [{ name: 'MsgNquestObjectiveClearAns', body: { Seq: 1, Result, ...(snap ? { UserInfo: snap.UserInfo } : {}) } }];
+    return [{ name: 'MsgUpdateNquestAns', body: { Seq: 1, Result, ...(snap ? { UserInfo: snap.UserInfo } : {}) } }];
   };
   if (!snap) return fail(R_FAIL, '계정 없음');
   const qid = Number(body?.QuestId), oid = Number(body?.ObjId);
@@ -195,9 +195,12 @@ register('MsgNquestObjectiveClearReq', (body, ctx): Msg[] => {
     return r && (r.CashCleared || Number(r.CurrentValue) >= (Number(d.Param?.[0]) || 1));
   })) rec.State = 6;
   ctx.store.putUser(uid(ctx), snap);
+  // 실기록 2026-11-06 (10805 목표 68, 75캐시): 응답은 MsgUpdateNquestAns 하나 {Seq, Result 1, UserInfo, NquestInfo [{QuestId, State 6,
+  //   Objective [{ObjId, CurrentValue 2(목표치), CompleteCash 75, CashCleared true}]}]}
+  const others = changes.filter((x) => x !== rec);
   return [
-    { name: 'MsgNquestObjectiveClearAns', body: { Seq: 1, Result: R_OK, UserInfo: ui, NquestInfo: [rec] } },
-    { name: 'MsgUpdateNquest', body: { Seq: 2, NquestInfo: [rec, ...changes.filter((x) => x !== rec)] } },
+    { name: 'MsgUpdateNquestAns', body: { Seq: 1, Result: R_OK, UserInfo: ui, NquestInfo: [rec] } },
+    ...(others.length ? [{ name: 'MsgUpdateNquest', body: { Seq: 2, NquestInfo: others } }] : []),
   ];
 });
 

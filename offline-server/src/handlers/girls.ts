@@ -222,3 +222,35 @@ register('MsgGirlRarityExpandReq', (body, ctx): Msg[] => {
     ...(questChanges.length ? [{ name: 'MsgUpdateNquest', body: { Seq: 2, NquestInfo: questChanges } }] : []),
   ];
 });
+
+// ── FM 부스트 (호감도 증가량 가속) MsgFMBoostInfoReq / MsgFMBoostReq {GirlInfo:{Girlid}}
+//   실기록 2026-11-06 (20208, Rarity 2, 호감도 2987, 최대 5500): 정보 {Seq, Result 1, GirlInfo, NeedCash 50, DateCount 3}
+//   (20405·20101 Rarity 1, 20107 Rarity 2 도 50·3). 부스트 {Seq, Result 1, UserInfo(캐시 -50), GirlInfo(+FmBoost {FmBoostStartRarity 2,
+//   BoostFamiliarity [3825, 4662]})} = 현재값에서 최대치까지 3등분한 1·2번째 지점(반올림). 데이트마다 다음 지점으로, 셋째 데이트에 최대 (date.ts).
+//   클라이언트 안내 boost_fm_desc '앞으로 N회의 데이트만 실행하면 호감도가 최대치' (N = BoostFamiliarity 길이 + 1).
+//   추정: 이미 부스트 중이거나 최대치면 Result 2, 캐시 부족 Result 7, 백화점 선물 조건(boost_fm_need_give_gift)은 기록이 없어 검사하지 않는다.
+const FM_BOOST_CASH = 50, FM_BOOST_DATES = 3;
+function fmMax(id: number): number {
+  const d: any = (table('girlTable.json')?.Girl ?? []).find((x: any) => Number(x.Id) === id) ?? {};
+  return (Number(d.FamiliaritySection1) || 0) + (Number(d.FamiliaritySection2) || 0) + (Number(d.FamiliaritySection3) || 0);
+}
+register('MsgFMBoostInfoReq', (body, ctx): Msg[] => {
+  const snap = ctx.store.getUser(ctx.session.accountId);
+  const g = (snap?.MyGirls?.MyGirlInfo ?? []).find((x: any) => Number(x.Girlid) === Number(body?.GirlInfo?.Girlid));
+  if (!snap || !g) return [{ name: 'MsgFMBoostInfoAns', body: { Seq: 1, Result: 2 } }];
+  const active = g.FmBoost && Number(g.FmBoost.FmBoostStartRarity) === Number(g.Rarity);
+  const full = (Number(g.Familiarity) || 0) >= fmMax(Number(g.Girlid));
+  return [{ name: 'MsgFMBoostInfoAns', body: { Seq: 1, Result: active || full ? 2 : 1, GirlInfo: g, NeedCash: FM_BOOST_CASH, DateCount: FM_BOOST_DATES } }];
+});
+register('MsgFMBoostReq', (body, ctx): Msg[] => {
+  const snap = ctx.store.getUser(ctx.session.accountId);
+  const g = (snap?.MyGirls?.MyGirlInfo ?? []).find((x: any) => Number(x.Girlid) === Number(body?.GirlInfo?.Girlid));
+  if (!snap || !g) return [{ name: 'MsgFMBoostAns', body: { Seq: 1, Result: 2 } }];
+  const ui = snap.UserInfo, id = Number(g.Girlid), cur = Number(g.Familiarity) || 0, max = fmMax(id);
+  if ((g.FmBoost && Number(g.FmBoost.FmBoostStartRarity) === Number(g.Rarity)) || cur >= max) return [{ name: 'MsgFMBoostAns', body: { Seq: 1, Result: 2, UserInfo: ui, GirlInfo: g } }];
+  if ((Number(ui.Cash) || 0) < FM_BOOST_CASH) return [{ name: 'MsgFMBoostAns', body: { Seq: 1, Result: 7, UserInfo: ui, GirlInfo: g } }];
+  ui.Cash = Number(ui.Cash) - FM_BOOST_CASH;
+  g.FmBoost = { FmBoostStartRarity: Number(g.Rarity), BoostFamiliarity: Array.from({ length: FM_BOOST_DATES - 1 }, (_, k) => Math.round(cur + ((max - cur) * (k + 1)) / FM_BOOST_DATES)) };
+  ctx.store.putUser(ctx.session.accountId, snap);
+  return [{ name: 'MsgFMBoostAns', body: { Seq: 1, Result: 1, UserInfo: ui, GirlInfo: g } }];
+});
