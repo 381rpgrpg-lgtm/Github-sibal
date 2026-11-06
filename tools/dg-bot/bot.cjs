@@ -647,7 +647,8 @@ function easyRace(ud, car) {
 const EVENT_POS = { 15: [463, 590], 12: [750, 500], 8: [840, 410] };
 const EVENT_CARD = { 3103: 0, 3000: 1, 3001: 2 }; // 카드 순서: 할로윈, Panic at Atratasus, Detective Claire
 // 이벤트별 지도 좌표 (PosId 가 같아도 지도가 다르다). 3001 PosId 13: 2026-11-04 캡처
-const EVENT_POS_Z = { 3001: { 13: [918, 515] } };
+// 3103-30 (PosId 19): 9개 중 유일하게 안 이긴 노드 = 보라색 'Time Attack' 핀 (2026-11-06 evmap.png, 나머지 8개는 S 표시)
+const EVENT_POS_Z = { 3001: { 13: [918, 515] }, 3103: { 19: [1045, 573] } };
 // 차량 조건이 맞지 않는 이벤트 (3000 Panic at Atratasus = 독일차만, 현재 ★4 는 일본차)
 const EVENT_NOCAR = new Set([3000]);
 // 이벤트 참가 조건 LimitGirlId·LimitGirlFMLevel 중 하나라도 맞는지
@@ -657,13 +658,16 @@ function eventGirlOk(ud, ez) {
   const lim = (ar?.LimitGirlId ?? []).map((g, i) => [g, Number(ar.LimitGirlFMLevel?.[i]) || 1]);
   return !lim.length || lim.some(([g, lv]) => { const m = (ud.MyGirls?.MyGirlInfo ?? []).find((x) => x.Girlid === g && x.State === 7); return m && famLv(g, Number(m.Familiarity) || 0) >= lv; });
 }
+// 지도에서 노드를 못 찾은 이벤트 레이스는 6시간 건너뜀 (run/event-nopos.json). 이전엔 실행 중에만 기억해 재시작마다 3분씩 헛돎(2026-11-06 5회)
+function evNoPos(zone, pos) { try { return Date.now() - (JSON.parse(fs.readFileSync(`${OUT}/event-nopos.json`, 'utf8'))[`${zone}:${pos}`] || 0) < 6 * 3600e3; } catch { return false; } }
+function markEvNoPos(zone, pos) { let j = {}; try { j = JSON.parse(fs.readFileSync(`${OUT}/event-nopos.json`, 'utf8')); } catch {} j[`${zone}:${pos}`] = Date.now(); try { fs.writeFileSync(`${OUT}/event-nopos.json`, JSON.stringify(j)); } catch {} }
 function eventRace() {
   if (globalThis.__noEvent) return null;
   // 이벤트가 '결과 없음'으로 끝나면(예: 아이템 보관함 가득) 6시간 동안 이벤트 전체를 쉰다 (run/EVENTBLOCK 시각)
   try { if (Date.now() - fs.statSync(`${OUT}/EVENTBLOCK`).mtimeMs < 6 * 3600e3) return null; } catch {}
   for (const z of eventZones) {
     const card = EVENT_CARD[z.ZoneId]; if (card === undefined || EVENT_NOCAR.has(z.ZoneId) || !eventGirlOk(globalThis.__ud, z.ZoneId)) continue;
-    const r = (z.Race ?? []).filter((x) => x.State & 1 && !(x.State & 16) && Number(x.WinPoint) > 0 && !(globalThis.__noResSkip ?? []).includes(x.RaceId)).sort((a, b) => a.RaceIndex - b.RaceIndex)[0]; // 결과 없음 반복(예 보관함 가득) 레이스는 건너뜀
+    const r = (z.Race ?? []).filter((x) => x.State & 1 && !(x.State & 16) && Number(x.WinPoint) > 0 && !(globalThis.__noResSkip ?? []).includes(x.RaceId) && !evNoPos(z.ZoneId, x.PosId)).sort((a, b) => a.RaceIndex - b.RaceIndex)[0]; // 결과 없음 반복(예 보관함 가득) 레이스는 건너뜀
     if (r) return { mode: 'event', card, zone: z.ZoneId, race: r, posId: r.PosId };
   }
   return null;
@@ -1084,7 +1088,7 @@ async function finishRace(t, tp, phases) {
     if (r === 'noresult') { const o = noRes[key] ?? { n: 0 }; noRes[key] = { n: Date.now() - (o.at ?? 0) < 6 * 3600e3 ? o.n + 1 : 1, at: Date.now() }; saveNoRes();
       if (noRes[key].n >= 2) log(`skip ${key} for 6h after ${noRes[key].n} no-results`); }
     if (r === 'win' && noRes[key]) { delete noRes[key]; saveNoRes(); }
-    if (r === 'nopos' && t.mode === 'event') globalThis.__noEvent = 1; // 이번 실행 동안 이벤트 건너뜀
+    if (r === 'nopos' && t.mode === 'event') { globalThis.__noEvent = 1; markEvNoPos(t.zone, t.posId); } // 이번 실행 + 그 노드 6시간 건너뜀
     else if (r === 'nopos') { log('stopping: unknown node position'); break; }
     if (['nohub', 'noresult', 'err'].includes(r)) await sleep(30000);
   }
