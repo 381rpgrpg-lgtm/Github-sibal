@@ -807,6 +807,10 @@ async function playRace(t) {
     await shot('last-panel');
     try { opened = require('child_process').execFileSync('python3', ['-I', '-c', "import sys;from PIL import Image;im=Image.open(sys.argv[1]).convert('RGB');print(int(min(im.getpixel((376,95)))>200))", `${OUT}/last-panel.png`], { encoding: 'utf8' }).trim() === '1'; } catch (e) { log('panel check err ' + e); opened = true; }
     if (!opened) log(`panel not open (try ${k + 1})`);
+    // 아직 메인 화면이면 Race 버튼 클릭이 안 먹은 것 (2026-11-06 01:26·01:47: 레벨 18 직후, 노드를 3번 눌러도 허브 그대로) -> Race 부터 다시
+    if (!opened && k < 2) { try { if (require('child_process').execFileSync('python3', ['-I', __dirname + '/ishub.py', `${OUT}/last-panel.png`], { encoding: 'utf8' }).startsWith('1')) {
+      log('still on hub: press Race again'); await page.mouse.click(1030, 640); await sleep(15000); await page.mouse.click(350, 612); await sleep(3000); await page.mouse.click(968, 468); await sleep(2000);
+      for (let i = 0; i < t.latest - t.zone; i++) { await page.mouse.click(425, 682); await sleep(4500); } } } catch (e) { log('ishub err ' + e); } }
   }
   if (!opened) return 'noresult';
   lastResult = null; raceStartAt = 0;
