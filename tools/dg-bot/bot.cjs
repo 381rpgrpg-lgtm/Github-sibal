@@ -435,7 +435,8 @@ async function manage() {
   if (dq?.Nvalue === 2) { await rpc('MsgGetDailyQuestRewardReq', {}); act('daily mission reward'); }
   // 친밀도 코인
   const now = Date.now() / 1000;
-  for (const g of ud.MyGirls?.MyGirlInfo ?? []) if (g.State === 7 && g.NextFamiliarityTime && g.NextFamiliarityTime < now) {
+  // 삐침(Emotion 1)·화남(2) 상태는 시각이 지나도 Result 2 로 거절되고 시각도 안 넘어간다(실기록 162건, 2026-11-06) -> 요청하지 않음
+  for (const g of ud.MyGirls?.MyGirlInfo ?? []) if (g.State === 7 && g.NextFamiliarityTime && g.NextFamiliarityTime < now && ![1, 2].includes(Number(g.Emotion))) {
     await rpc('MsgCollectFamiliarityReq', { GirlInfo: g }); act(`familiarity coin ${g.Girlid}`);
   }
   ud = pick(await rpc('MsgLoginReq'), 'MsgUserData');
