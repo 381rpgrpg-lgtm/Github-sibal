@@ -169,10 +169,13 @@ async function manage() {
   if (!ud) { log('login failed'); return null; }
   const ui = ud.UserInfo;
   // 레이스 보상 (State 2 비트)
+  let rewarded = false;
   for (const z of ud.RaceZones.RaceZone) for (const r of z.Race) if (r.State & 2 && z.ZoneId < 1000) {
     const a = pick(await rpc('MsgRaceRewardReq', { ZoneId: z.ZoneId, RaceId: r.RaceId }), 'MsgRaceRewardAns');
-    act(`race reward ${r.RaceId}: ${JSON.stringify(a?.RewardInfo ?? null).slice(0, 160)}`);
+    act(`race reward ${r.RaceId}: ${JSON.stringify(a?.RewardInfo ?? null).slice(0, 160)}`); rewarded = true;
   }
+  // 보상 부품이 들어온 뒤의 보관함으로 칸을 센다 (2026-11-06 17:37: 보상 직후 옛 목록으로 세어 안 팔고 이벤트 시작 -> '부품 보관함이 가득' 으로 시작 안 됨)
+  if (rewarded) ud = pick(await rpc('MsgLoginReq'), 'MsgUserData') ?? ud;
   // 아이템 칸 확보 (위 tidyItems). 부품 상자를 열면 부품이 늘어나므로 부품 칸 정리보다 먼저
   try { ud = await tidyItems(ud); } catch (e) { log('item tidy error ' + e.message); }
   // 부품 칸 확보: 레이스 보상 부품이 들어갈 칸이 없으면 시작이 막힌다 (부품 화면으로 이동). 빈 칸 2개 유지, 장착 안 된 ★1 부품부터 판다
