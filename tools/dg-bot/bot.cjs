@@ -603,6 +603,7 @@ function eventRace() {
 // ── 브라우저 ──
 let browser, page, lastResult = null, raceStartAt = 0, eventZones = [];
 const reqSeen = []; // 브라우저가 보낸 RPC 이름 (화면 전환 확인용)
+const duelFrames = []; // 실시간 대전 서버 프레임(대기열·방·결과)
 let ogt = '';
 async function openGame() {
   const t0 = Date.now(), mark = (n) => { ogt += ` ${n}:${Math.round((Date.now() - t0) / 1000)}`; }; ogt = '';
@@ -621,6 +622,13 @@ async function openGame() {
       }
     }
     return r.continue(); });
+  // 실시간 대전 웹소켓 프레임: 대전 시도 중(globalThis.__duelLog 파일 지정)이면 모두 기록, 최근 판단용 프레임은 duelFrames 에
+  page.on('websocket', (ws) => {
+    const w = (d, pl) => { const ps = typeof pl === 'string' ? pl : '[bin]';
+      if (/"t":"(queue|match|room|go|result|opp\.finish|room\.closed|error|resume)"/.test(ps)) { duelFrames.push(ps.slice(0, 400)); if (duelFrames.length > 400) duelFrames.splice(0, 200); }
+      if (globalThis.__duelLog && !/"t":"(ping|pong)"/.test(ps)) try { fs.appendFileSync(globalThis.__duelLog, JSON.stringify({ t: Date.now(), d, p: ps.slice(0, 20000) }) + '\n'); } catch {} };
+    ws.on('framesent', (f) => w('>', f.payload)); ws.on('framereceived', (f) => w('<', f.payload));
+  });
   page.on('response', async (res) => {
     try {
       if (!res.url().endsWith('/api/rpc')) return;
@@ -688,6 +696,35 @@ async function playRace(t) {
   const tp0 = Date.now(), tp = (n) => phases.push(`${n}:${Math.round((Date.now() - tp0) / 1000)}`); const phases = [];
   if (!(await openGame())) { log(`hub not reached (requests: ${reqSeen.slice(-8).join(',')} |${ogt})`); await shot('nohub'); return 'nohub'; }
   tp('hub');
+  if (t.mode === 'duel') {
+    // 실시간 대전 빠른 매칭 (2026-11-06): 허브 Challenge(1190,640) -> Live Duel(1105,450) -> QUICK MATCH(678,223), 최대 310초.
+    //   상대가 잡히면(room) 로비의 READY(435,437, 오프라인 대전 서버 화면으로 확인) -> match -> go -> 주행 -> result. 프레임은 run/duel-ws-*.jsonl
+    globalThis.__duelLog = `${OUT}/duel-ws-${new Date().toISOString().replace(/[:.]/g, '').slice(0, 15)}.jsonl`;
+    duelFrames.length = 0;
+    try {
+      await page.mouse.click(1190, 640); await sleep(10000);
+      await page.mouse.click(1105, 450); await sleep(15000);
+      await shot('duel-screen');
+      await page.mouse.click(678, 223);
+      const t0 = Date.now(); let st = 'searching';
+      while (Date.now() - t0 < 320000) { await sleep(3000);
+        if (duelFrames.some((f) => /"t":"queue".*"status":"timeout"/.test(f))) { st = 'timeout'; break; }
+        if (duelFrames.some((f) => /"t":"(room|match)"/.test(f))) { st = 'matched'; break; } }
+      const maxSize = Math.max(0, ...duelFrames.map((f) => Number((f.match(/"size":(\d+)/) || [])[1] || 0)));
+      log(`duel queue: ${st} after ${Math.round((Date.now() - t0) / 1000)}s (max queue size ${maxSize})`);
+      if (st !== 'matched') return 'duel-none';
+      act('DUEL MATCHED: ' + duelFrames.filter((f) => /"t":"(room|match)"/.test(f)).slice(-1)[0]?.slice(0, 200));
+      await shot('duel-lobby');
+      await evalJ(DRIVER); await evalJ('window.__botSmart = true; window.__botLead = 0; window.__botLeadEnd = 0');
+      for (let i = 0; i < 3 && !duelFrames.some((f) => /"t":"match"/.test(f)); i++) { await page.mouse.click(435, 437); await sleep(6000); }
+      const t1 = Date.now();
+      while (Date.now() - t1 < 15 * 60e3 && !duelFrames.some((f) => /"t":"(result|room\.closed)"/.test(f))) await sleep(5000);
+      await shot('duel-result');
+      const res = duelFrames.filter((f) => /"t":"(result|room\.closed)"/.test(f)).slice(-1)[0] ?? 'no result';
+      act('DUEL RESULT: ' + res.slice(0, 300));
+      return /"win":true/.test(res) ? 'win' : 'lose';
+    } finally { globalThis.__duelLog = null; }
+  }
   if (t.mode === 'worldtour') {
     // 월드 투어 (2026-11-05 기록): 허브 Challenge(1190,640) -> World Tour 카드(795,450) -> Start Race(1080,662)
     //   -> MsgBattleMatchReq (상대·트랙) -> 매칭 화면 카운트다운 뒤 자동 MsgBattleStartReq {RaceType 4} -> 대화 -> 주행 -> MsgBattleResultReq
@@ -780,7 +817,7 @@ async function finishRace(t, tp, phases) {
   const grades = await evalJ('JSON.stringify(window.__bot && {g: __bot.grades.map(g=>g.g).join(""), min: __bot.grades.map(g=>g.min), boosts: __bot.boosts||0, smart: !!window.__botSmart})').catch(() => null);
   if (!lastResult) { log('no result'); await shot('noresult'); return 'noresult'; }
   const q = lastResult.req, a = lastResult.ans;
-  const rec = { at: new Date().toISOString().slice(5, 16), race: t.mode === 'event' ? `event${t.card}` : t.mode === 'weekly' ? 'weekly' : t.mode === 'worldtour' ? 'worldtour' : `${t.zone}-${t.race.RaceIndex}`, id: q.BattleId, win: q.IsPlayerWin, crazy: q.ExcellentCnt,
+  const rec = { at: new Date().toISOString().slice(5, 16), race: t.mode === 'event' ? `event${t.card}` : t.mode === 'weekly' ? 'weekly' : t.mode === 'worldtour' ? 'worldtour' : t.mode === 'duel' ? 'duel' : `${t.zone}-${t.race.RaceIndex}`, id: q.BattleId, win: q.IsPlayerWin, crazy: q.ExcellentCnt,
     great: q.PerfectCnt, good: q.GoodCnt, bad: q.BadCnt, miss: q.MissCnt, ps: q.PerfectStart, nitro: q.NitroUseNum, time: +(q.TimeRecord || 0).toFixed(2),
     opp: +(q.OpponentTimeRecord || 0).toFixed(2), mode: t.mode ?? 'story', result: a?.Result, grade: a?.ClearRec?.Grade, coin: a?.RewardInfo?.Coin, grades };
   tp('result'); rec.phases = phases.join(' ') + ' |' + ogt;
@@ -906,6 +943,10 @@ async function finishRace(t, tp, phases) {
     const wkFile = `${OUT}/weekly.json`, today = new Date().toISOString().slice(0, 10);
     let wk = {}; try { wk = JSON.parse(fs.readFileSync(wkFile, 'utf8')); } catch {}
     if (!questCar && (wk[today] ?? 0) < 3 && Number(ud.UserInfo.FightTicket) > 0) { t = { mode: 'weekly', zone: 0, race: null }; wk[today] = (wk[today] ?? 0) + 1; fs.writeFileSync(wkFile, JSON.stringify(wk)); }
+    // 실시간 대전: 8시간마다 한 번 빠른 매칭 5분 (상대가 없으면 바로 다음 일). 끄기: run/NODUEL
+    { const df = `${OUT}/duel.json`; let dj = {}; try { dj = JSON.parse(fs.readFileSync(df, 'utf8')); } catch {}
+      if (!questCar && !fs.existsSync(`${OUT}/NODUEL`) && (!t || t.farm) && Date.now() - (dj.last ?? 0) > 8 * 3600e3) {
+        dj.last = Date.now(); fs.writeFileSync(df, JSON.stringify(dj)); t = { mode: 'duel', zone: 0, race: null, farm: false }; } }
     // 월드 투어: 무료 시도(MyWorldTour.LeftTry, 하루 7회)가 남아 있으면 탄다 (보상 코인 600·토큰 3·경험치, 시즌 티어 보상).
     //   남은 횟수는 서버 값만 믿는다 (초기화 시각 미확인). 0 이면 1시간 뒤 다시 확인. 결과 없음 2회면 6시간 쉼 (noRes 'worldtour')
     //   매칭(MsgBattleMatchReq) 때 Big Race Ticket(FightTicket) 1장을 쓴다 (2026-11-05 기록 29 -> 28 -> 27). 주간 레이스용으로 3장은 남긴다
@@ -929,7 +970,7 @@ async function finishRace(t, tp, phases) {
       } catch (e) { log('fuel item err ' + e); }
       const w = ((car?.FuelConsume ?? 25) - fuelNow) * 15 + 5; log(`fuel ${fuelNow}; sleeping ${w}s`); await sleep(w * 1000); continue; }
     const key = t.race?.RaceId ?? t.mode;
-    log(`${t.mode === 'event' ? 'event' : t.mode === 'weekly' ? 'weekly' : t.mode === 'worldtour' ? 'worldtour' : t.farm ? 'farm' : 'target'} ${t.zone}-${t.race?.RaceIndex} (${key})${t.daily ? ' daily' : ''} fuel ${fuelNow} coin ${ud.UserInfo.Coin} cash ${ud.UserInfo.Cash} lv ${ud.UserInfo.Charlevel}`);
+    log(`${t.mode === 'event' ? 'event' : t.mode === 'weekly' ? 'weekly' : t.mode === 'worldtour' ? 'worldtour' : t.mode === 'duel' ? 'duel' : t.farm ? 'farm' : 'target'} ${t.zone}-${t.race?.RaceIndex} (${key})${t.daily ? ' daily' : ''} fuel ${fuelNow} coin ${ud.UserInfo.Coin} cash ${ud.UserInfo.Cash} lv ${ud.UserInfo.Charlevel}`);
     t.smart = (fails[key] ?? 0) >= 2 || fs.existsSync(`${OUT}/SMART`); if (t.smart) log('smart nitro mode');
     // 성능 조합 (perf.mjs = 오프라인 서버 finalAttr, 실기록과 일치): 퀘스트 동승·해금 동승이 없으면 현재 차에 가장 센 동승자.
     //   월드 투어·한 번 이상 진 본편은 가장 센 차+동승자 (2026-11-05: ★5 Lv1 + 퀘스트 끝난 동승자 1799 vs ★4 + 서아 2572, 8-20 보스 연패)
