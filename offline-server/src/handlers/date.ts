@@ -1,7 +1,7 @@
 // 데이트 (장소 데이트). 흐름·형식은 실서버 기록(data/recorded, 2026-11-01: 튜토리얼 20105 공원, 20101 공원)을 따른다.
 //
 // MsgDateProposeReq {GirlInfo} -> {Seq, Result 1, GirlInfo, UserInfo}
-// MsgDateStartReq {GirlInfo:{Girlid}, DatePlace} -> MsgDateStartAns {Seq, Result 1, UserInfo(코인 -Price), GirlInfo:{Girlid}, DatePlace, ItemInfo []}
+// MsgDateStartReq {GirlInfo:{Girlid}, DatePlace} -> MsgDateStartAns {Seq, Result 1, UserInfo(코인 -Price x 희귀도 배율), GirlInfo:{Girlid}, DatePlace, ItemInfo []}
 //   + MsgLoadScript {Script:{Chunk:[...]}}  — 대본은 서버가 scripts.json(Script/Text) 으로 조립한다.
 //   친밀도 단계 lv: girlTable FamiliaritySection1..3 누적(400 / +230 / +1300) → 1..4 (기록: 0→1, 440→2, 630→3)
 //   일반 데이트 (Completion 에 Date(1024) 비트 있음):
@@ -175,7 +175,7 @@ function placeMood(girl: number, placeId: number, lastPlace = 0): { notice: any;
 
 interface DateState { girl: number; place: number; lv: number; tutorial: boolean; likes: number; dislikes: number; peevish?: boolean;
   chat: string | null; chatSat: number; resultIndex: number; finalIndex: number; satisfaction?: number; end?: string;
-  events?: string[]; gift?: boolean;
+  events?: string[]; gift?: boolean; refused?: boolean;
   dept?: { scripts: string[]; gift?: { index: number; count: number; delta: number } } }
 const key = (ctx: Ctx) => `date:${ctx.session.accountId}`;
 const getState = (ctx: Ctx): DateState | null => { const s = ctx.store.getMeta(key(ctx)); return s ? JSON.parse(s) : null; };
@@ -229,7 +229,10 @@ register('MsgDateStartReq', (body, ctx): Msg[] => {
   const ui = snap.UserInfo;
   const girl = Number(g.Girlid), lv = famLevel(g, Number(g.Familiarity) || 0);
   if (lv < (Number(place.UnlockFmLevel) || 1)) return fail(`호감도 단계 부족 (${lv} < ${place.UnlockFmLevel})`); // 추정: 거절 코드 미확인
-  const price = Number(place.Price) || 0;
+  // 장소 비용 = 표 Price x 희귀도 배율(1성 1, 2성 1.5, 3성 2)을 100 단위 반올림 (실기록 2026-11-06, 4명 11개 장소 15건 모두 일치:
+  //   20402·20202(3성) 바 1200 -> 2400, 카페 375 -> 800, 20303(2성) 노래방 1400 -> 2100, 20302(1성) 42071 350 -> 400)
+  const rarity = Number(g.Rarity) || Number(gdef(girl)?.Rarity) || 1;
+  const price = Math.round((Number(place.Price) || 0) * (1 + 0.5 * (rarity - 1)) / 100) * 100;
   if ((Number(ui.Coin) || 0) < price) return fail('코인 부족', 3);
   // 티켓 장소: 티켓 1장 소모. 실기록(경기장 60010): 시작 응답 ItemInfo [{Itemid, Itemtype, Count 남은 수, StackNum 남은 수}]
   const ticket = Number(place.Ticketid) || 0;
@@ -261,7 +264,16 @@ register('MsgDateStartReq', (body, ctx): Msg[] => {
       return o;
     })) : null;
   const events = moodChunk ? [mood!.event] : [];
-  if (!tutorial && Number(g.Emotion) === 1 && scriptRows(girl, 'Date_Peevish', lv).length) {
+  if (!tutorial && intro.some((o) => o.Function === 'BREAK')) {
+    // 장소 거절 (실기록 2026-11-06 20402 Date_Bar 단계 3, 바·카지노·VIP 클럽은 20402·20301 모든 단계): 장소 대본이 BREAK 로 끝난다.
+    //   대본 [장소(… BREAK Index 1), Date_End_Basic, {장소 Index 2, 3}]. Index 1 -> MsgDateResultAns DateResult 0, 친밀도·NthDate·마지막 장소 그대로,
+    //   DateCoolTime 만 갱신. 장소 비용은 시작 때 빠지고 돌려주지 않는다.
+    const ins = intro.map((o) => (o.Function === 'BREAK' ? { ...o, Index: 1 } : o));
+    chunks.push(chunk(girl, place.ScriptName, lv, ins));
+    chunks.push(chunk(girl, 'Date_End_Basic', lv, scriptRows(girl, 'Date_End_Basic', lv).map((r) => toIns(r))));
+    chunks.push(chunk(girl, place.ScriptName, lv, [{ Index: 2 }, { Index: 3 }]));
+    st = { girl, place: place.Id, lv, tutorial, likes: 0, dislikes: 0, chat: null, chatSat: 0, resultIndex: 1, finalIndex: 3, end: 'Date_End_Basic', events: [], refused: true } as DateState;
+  } else if (!tutorial && Number(g.Emotion) === 1 && scriptRows(girl, 'Date_Peevish', lv).length) {
     // 삐친 캐릭터와의 데이트 (실기록 2026-11-05, 20101·20303 원인 11): 대본 [Date_Peevish(CHANGE [장소, 캐릭터, SYSTEM, face_peevish, 장소 소리]),
     //   Date_End_Peevish, {장소 대본 Index 1, Index 2}], 문항 없음. Index 1 -> 만족도 3(싫어하는 장소면 1), Index 2 -> 결과에서 기분 0·원인 0 (풀림)
     const fix = (r: any) => { const o = toIns(r);
@@ -332,6 +344,15 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
   const ui = snap.UserInfo;
   const save = () => { setState(ctx, st); ctx.store.putUser(ctx.session.accountId, snap); };
   if (st.dept) return departmentProgress(snap, g, st, body, head, ctx, save);
+  if (st.refused) { // 장소 거절: Index 1 에서 결과 0, 그 뒤 인덱스는 빈 응답
+    if (depth === 0 && index === st.resultIndex && g) {
+      g.DateCoolTime = Math.floor(Date.now() / 1000) + coolSec(Number(g.Girlid));
+      setState(ctx, null); ctx.store.putUser(ctx.session.accountId, snap);
+      return [{ name: 'MsgScriptProgressAns', body: head }, { name: 'MsgDateResultAns', body: { Seq: 2, GirlInfo: g, UserInfo: ui, DatePlace: st.place, DateResult: 0,
+        UpdateGirlInfo: [], GirlMemorySet: snap.GirlMemorySet ?? { GirlMemory: [], Version: 1 }, GgraphPatch: { Gnode: [] }, CallScript: [] } }];
+    }
+    return [{ name: 'MsgScriptProgressAns', body: head }];
+  }
 
   // 채팅 이벤트 답 (튜토리얼은 Depth 0 Index 1, 일반은 Depth 1 Index 5)
   const isChat = (st.tutorial || st.resultIndex === 2) && !st.gift ? depth === 0 && index === 1 : depth === 1 && index === 5;
