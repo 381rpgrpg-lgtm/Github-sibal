@@ -508,6 +508,29 @@ async function manage() {
     const eq = items.filter((i) => i.Equipcarid === carId);
     const used = new Set(eq.map((i) => i.Equipindex)), cats = new Set(eq.map((i) => PT.get(i.Itemtype).Category));
     const sum = (i) => Object.values(i.Attributes ?? PT.get(i.Itemtype).Attributes ?? {}).reduce((a, b) => a + Number(b || 0), 0);
+    // 현재 차량의 다음 부품 칸 열기 (2026-11-06: ★5 주력이 칸 1개로 13-12 를 0.6초 차로 연패). 비용을 먼저 조회(읽기 전용)하고
+    //   캐시가 들지 않고 코인이 6만 이상 남을 때만 연다. 조회 결과는 오프라인 서버 비용표 자료로 run/samples-slot.jsonl 에 남긴다.
+    //   열 수 없으면(Result 2·18) 그 차는 6시간 다시 묻지 않는다 (run/slot-skip.json)
+    try {
+      const CT = new Map(JSON.parse(fs.readFileSync('/home/user/Github-sibal/offline-server/data/tables/cars.json', 'utf8')).Car.map((c) => [c.Id, c]));
+      const maxSlot = Number(CT.get(car?.Cartype)?.Slot) || 1, cur = Number(car?.SlotNum) || 1;
+      let skip = {}; try { skip = JSON.parse(fs.readFileSync(`${OUT}/slot-skip.json`, 'utf8')); } catch {}
+      if (car && cur < maxSlot && !(skip[carId] > Date.now())) {
+        const next = cur + 1;
+        const ca = pick(await rpc('MsgCarSlotCostReq', { CarInfo: { Carid: carId, SlotNum: next } }), 'MsgCarSlotCostAns');
+        const cost = ca?.Cost ?? {};
+        fs.appendFileSync(`${OUT}/samples-slot.jsonl`, JSON.stringify({ at: new Date().toISOString(), cartype: car.Cartype, grade: CT.get(car.Cartype)?.Grade, level: car.UpgradeLevel, slot: next, result: ca?.Result, cost }) + '\n');
+        const coin = Number(u3.UserInfo.Coin) || 0;
+        if (ca?.Result === 1 && !(Number(cost.Cash) > 0) && (Number(cost.Coin) || 0) <= coin - 60000) {
+          const oa = pick(await rpc('MsgCarSlotOpenReq', { CarInfo: { Carid: carId, SlotNum: next } }), 'MsgCarSlotOpenAns');
+          act(`open part slot ${next}/${maxSlot} on car ${carId} (★${CT.get(car.Cartype)?.Grade} Lv${car.UpgradeLevel}) cost ${JSON.stringify(cost)}: Result ${oa?.Result}`);
+          if (oa?.Result === 1) car.SlotNum = next; else { skip[carId] = Date.now() + 6 * 3600e3; fs.writeFileSync(`${OUT}/slot-skip.json`, JSON.stringify(skip)); }
+        } else if (ca?.Result !== 1 || Number(cost.Cash) > 0) {
+          log(`slot ${next} on car ${carId}: not opened (Result ${ca?.Result}, cost ${JSON.stringify(cost)})`);
+          skip[carId] = Date.now() + 6 * 3600e3; fs.writeFileSync(`${OUT}/slot-skip.json`, JSON.stringify(skip));
+        }
+      }
+    } catch (e) { log('slot err ' + e); }
     for (let k = 1; car && k <= (Number(car.SlotNum) || 1); k++) {
       if (used.has(k)) continue;
       const it = items.filter((i) => !(i.Equipcarid > 0) && !cats.has(PT.get(i.Itemtype).Category)).sort((a, b) => sum(b) - sum(a))[0];
