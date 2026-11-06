@@ -602,6 +602,13 @@ function nextRace(ud, skip = new Set()) {
 //   재승리 = 숙련도 +2, 코인 RewardCoin(600) (실기록 1-12)
 // 2026-11-06: 파밍이 최신 구역의 아슬아슬한 레이스(13-11, 0.08초 차)를 골라 4판 중 3판을 져 연료만 썼다(패배 = 코인 0).
 //   파밍에서 6시간 안에 2번 진 레이스는 6시간 동안 파밍 후보에서 뺀다.
+// 같은 기록으로 3번 연속 진 앞 레이스는 6시간 쉼 (run/det-loss.json). 빨리감기 주행은 같은 차·동승이면 기록이 매번 같아
+//   재도전이 연료만 쓴다 (2026-11-06 13-12: 50.34 대 50.09~50.13, 하루 21패, 연료 부족으로 10분에 1판일 때 판당 연료 22)
+const DET_LOSS_F = () => `${OUT}/det-loss.json`;
+function detLossSkip() { try { const j = JSON.parse(fs.readFileSync(DET_LOSS_F(), 'utf8')); return Object.keys(j).filter((k) => j[k].n >= 3 && Date.now() - j[k].at < 6 * 3600e3).map(Number); } catch { return []; } }
+function detLossNote(id, time, win) { let j = {}; try { j = JSON.parse(fs.readFileSync(DET_LOSS_F(), 'utf8')); } catch {}
+  if (win) delete j[id]; else { const o = j[id]; j[id] = { time, n: o && Math.abs(o.time - time) < 0.02 ? o.n + 1 : 1, at: Date.now() }; if (j[id].n === 3) log(`skip ${id} for 6h: lost 3 times with the same time ${time}`); }
+  try { fs.writeFileSync(DET_LOSS_F(), JSON.stringify(j)); } catch {} }
 const FARM_LOSS_F = () => `${OUT}/farm-loss.json`;
 function farmLossy(id) { try { const j = JSON.parse(fs.readFileSync(FARM_LOSS_F(), 'utf8')); const a = (j[id] ?? []).filter((t) => Date.now() - t < 6 * 3600e3); return a.length >= 2; } catch { return false; } }
 function farmLoss(id) { let j = {}; try { j = JSON.parse(fs.readFileSync(FARM_LOSS_F(), 'utf8')); } catch {} j[id] = [...(j[id] ?? []).filter((t) => Date.now() - t < 6 * 3600e3), Date.now()]; try { fs.writeFileSync(FARM_LOSS_F(), JSON.stringify(j)); } catch {} }
@@ -972,7 +979,7 @@ async function finishRace(t, tp, phases) {
     }
     const curCarNow = ud.Cars.CarInfo.find((c) => c.Carid === ud.UserInfo.Currentcar);
     const questCar = expandQuestActive(ud) && curCarNow?.Grade === 2;
-    const frontier = questCar ? null : (nextRace(ud, new Set([...Object.keys(fails).filter((k) => fails[k] >= 3).map(Number), ...noResSkip()])) ?? nextRace(ud, new Set(noResSkip()))); // 3패 이상 레이스는 다른 안 이긴 레이스가 있으면 뒤로 (예 8-14 연패 중 8-25 캐릭터 레이스 먼저)
+    const frontier = questCar ? null : (nextRace(ud, new Set([...Object.keys(fails).filter((k) => fails[k] >= 3).map(Number), ...noResSkip(), ...detLossSkip()])) ?? nextRace(ud, new Set([...noResSkip(), ...detLossSkip()]))); // 3패 이상 레이스는 다른 안 이긴 레이스가 있으면 뒤로 (예 8-14 연패 중 8-25 캐릭터 레이스 먼저)
     const farm = questCar ? (eventRace() ?? easyRace(ud, curCarNow)) : farmRace(ud);
     // 앞 레이스에서 3번 이상 졌으면 파밍 4판마다 1번 도전 (60분 대기 없앰). 앞 레이스가 없으면 파밍만.
     let t = frontier;
@@ -1097,6 +1104,7 @@ async function finishRace(t, tp, phases) {
     if (r !== 'win' && r !== 'lose') SAFE.progressUndo(); // 끝나지 않은 시도는 진척 감시에서 빼기
     if (r === 'lose' && t.farm && t.race?.RaceId) farmLoss(t.race.RaceId);
     if (r === 'lose' && !t.farm) fails[key] = (fails[key] ?? 0) + 1;
+    if ((r === 'win' || r === 'lose') && !t.farm && !t.mode && t.race?.RaceId) detLossNote(t.race.RaceId, Number(stats.races[stats.races.length - 1]?.time) || 0, r === 'win');
     if (r === 'win' && !t.farm) fails[key] = 0; saveFails();
     if (r === 'noresult' && t.mode === 'event') fs.writeFileSync(`${OUT}/EVENTBLOCK`, new Date().toISOString());
     if (r === 'noresult') { const o = noRes[key] ?? { n: 0 }; noRes[key] = { n: Date.now() - (o.at ?? 0) < 6 * 3600e3 ? o.n + 1 : 1, at: Date.now() }; saveNoRes();
