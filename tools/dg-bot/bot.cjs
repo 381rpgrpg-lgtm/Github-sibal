@@ -364,6 +364,10 @@ async function manage() {
       // run/peevish-keep.json [캐릭터]: 삐침 방치 실험 대상은 풀지 않는다 (2026-11-06 사용자 승인: 차민 20101, 호감도 하락 관찰)
       let keepPeevish = []; try { keepPeevish = JSON.parse(fs.readFileSync(`${OUT}/peevish-keep.json`, 'utf8')); } catch {}
       for (const x of ud.MyGirls?.MyGirlInfo ?? []) if (x.State === 7 && Number(x.Emotion) === 1 && !keepPeevish.includes(x.Girlid)) want.set(x.Girlid, { q: 'peevish', place: 0 });
+      // run/date-priority.json {캐릭터: 남은 횟수}: 쿨타임이 끝나면 우선 데이트 (예: FM 부스트 뒤 3회면 호감도 최대, 2026-11-06 지아 20208)
+      let prio = {}; try { prio = JSON.parse(fs.readFileSync(`${OUT}/date-priority.json`, 'utf8')); } catch {}
+      for (const [gidS, left] of Object.entries(prio)) { const gg = Number(gidS), x = (ud.MyGirls?.MyGirlInfo ?? []).find((y) => y.Girlid === gg);
+        if (left > 0 && x && x.State === 7 && !(Number(x.DateCoolTime) > Date.now() / 1000) && !want.has(gg)) want.set(gg, { q: 'priority', place: 0 }); }
       for (const q of ud.NquestInfos?.NquestInfo ?? []) if (q.State === 3) for (const o of QUESTS.find((x) => x.Id === q.QuestId)?.Objective ?? []) {
         const cur = q.Objective?.find((x) => x.ObjId === o.ObjId)?.CurrentValue ?? 0;
         if (cur >= Number(o.Param[0] || 1)) continue;
@@ -386,6 +390,7 @@ async function manage() {
         const place = w.place || places.find((p) => !h.includes(p) && p !== last) || places.find((p) => p !== last) || 41011;
         const out = require('child_process').execFileSync('node', [__dirname + '/dates.cjs', String(g), String(place)], { encoding: 'utf8', timeout: 120000 });
         const line = out.trim().split('\n').pop(); act(`quest date ${w.q} ${g}@${place}: ${line.slice(0, 160)}`);
+        if (w.q === 'priority' && /"final":\d/.test(line)) { try { const pf = `${OUT}/date-priority.json`; const pj = JSON.parse(fs.readFileSync(pf, 'utf8')); pj[g] = Math.max(0, (pj[g] ?? 1) - 1); fs.writeFileSync(pf, JSON.stringify(pj)); } catch {} }
         hist[g] = [place, ...h.filter((p) => p !== place)].slice(0, Math.max(1, places.length - 1)); fs.writeFileSync(hf, JSON.stringify(hist));
         n++; await sleep(5000);
       }
