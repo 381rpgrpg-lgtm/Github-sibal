@@ -956,7 +956,12 @@ async function finishRace(t, tp, phases) {
       }
     }
     const questFarm = !!(t?.farm && (dropQuest || t.quest));
-    if (farm && !questFarm && (!frontier || ((fails[frontier.race.RaceId] ?? 0) >= 3 && farmCount < 4))) { t = farm; t.farm = t.mode !== 'event'; farmCount++; }
+    // 3패 이상 앞 레이스는 30분마다 한 번 재도전 (마지막 시도 시각을 run/hard-retry.json 에 저장).
+    //   2026-11-06: 파밍 4판 카운터(farmCount)가 메모리에만 있어 봇 재시작(5시간 7회)·다른 목표가 낄 때마다 0 이 돼 9-16 재도전이 5시간 없었다
+    let hardLast = {}; try { hardLast = JSON.parse(fs.readFileSync(`${OUT}/hard-retry.json`, 'utf8')); } catch {}
+    const hardFront = !!frontier && (fails[frontier.race.RaceId] ?? 0) >= 3;
+    const hardDue = hardFront && Date.now() - (hardLast[frontier.race.RaceId] ?? 0) > 30 * 60e3;
+    if (farm && !questFarm && (!frontier || (hardFront && !hardDue))) { t = farm; t.farm = t.mode !== 'event'; farmCount++; }
     else farmCount = 0;
     if (!questCar && !questFarm && evt && (!t || t.farm)) t = evt; // 이벤트 챕터(포인트·코인·부품)는 파밍보다 우선
     // 주간 레이스: 하루 3회까지 (퀘스트 10301 참여 3회, 순위 보상 캐시). 대전 티켓(FightTicket) 사용, ★4 현재 설정 가져오기
@@ -990,6 +995,7 @@ async function finishRace(t, tp, phases) {
       } catch (e) { log('fuel item err ' + e); }
       const w = ((car?.FuelConsume ?? 25) - fuelNow) * 15 + 5; log(`fuel ${fuelNow}; sleeping ${w}s`); await sleep(w * 1000); continue; }
     const key = t.race?.RaceId ?? t.mode;
+    if (t.race && (fails[t.race.RaceId] ?? 0) >= 3 && !t.farm) { try { const hf = `${OUT}/hard-retry.json`; let hj = {}; try { hj = JSON.parse(fs.readFileSync(hf, 'utf8')); } catch {} hj[t.race.RaceId] = Date.now(); fs.writeFileSync(hf, JSON.stringify(hj)); } catch {} }
     log(`${t.mode === 'event' ? 'event' : t.mode === 'weekly' ? 'weekly' : t.mode === 'worldtour' ? 'worldtour' : t.mode === 'duel' ? 'duel' : t.farm ? 'farm' : 'target'} ${t.zone}-${t.race?.RaceIndex} (${key})${t.daily ? ' daily' : ''} fuel ${fuelNow} coin ${ud.UserInfo.Coin} cash ${ud.UserInfo.Cash} lv ${ud.UserInfo.Charlevel}`);
     t.smart = (fails[key] ?? 0) >= 2 || fs.existsSync(`${OUT}/SMART`); if (t.smart) log('smart nitro mode');
     // 성능 조합 (perf.mjs = 오프라인 서버 finalAttr, 실기록과 일치): 퀘스트 동승·해금 동승이 없으면 현재 차에 가장 센 동승자.
