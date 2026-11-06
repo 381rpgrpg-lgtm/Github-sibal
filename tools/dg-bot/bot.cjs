@@ -714,7 +714,7 @@ async function shot(n) { try { await page.screenshot({ path: `${OUT}/${n}.png`, 
 const EVENT_CARD_X = [205, 585, 965];
 async function playRace(t) {
   const pos = t.mode === 'story' || !t.mode ? racePos(t.zone, t.race.RaceIndex) : null;
-  const xy = pos ? POS[pos] : null;
+  const xy = pos != null ? POS[pos] : null; // RacePos 0 도 유효 (10-3). 0 을 거짓으로 보아 종료·재시작이 7분간 반복됐다 (2026-11-06 02:44)
   if ((t.mode === 'story' || !t.mode) && !xy) { log(`unknown RacePos ${pos} for ${t.zone}-${t.race.RaceIndex}`); return 'nopos'; }
   const tp0 = Date.now(), tp = (n) => phases.push(`${n}:${Math.round((Date.now() - tp0) / 1000)}`); const phases = [];
   if (!(await openGame())) { log(`hub not reached (requests: ${reqSeen.slice(-8).join(',')} |${ogt})`); await shot('nohub'); return 'nohub'; }
