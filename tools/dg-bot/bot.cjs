@@ -19,7 +19,8 @@ const act = (s) => { log('ACT ' + s); stats.actions.push(`${new Date().toISOStri
 // 노드 좌표 (RacePos -> 지도 화면 좌표, 1280x720). 스크린샷으로 확인한 값.
 const POS = { 1: [655, 240], 2: [828, 250], 3: [975, 250], 4: [1093, 275], 7: [558, 315], 8: [729, 320], 9: [985, 375],
   10: [1213, 320], 11: [578, 470], 15: [490, 585], 17: [828, 600], 19: [1077, 570],
-  5: [1178, 200], 6: [478, 400], 12: [720, 500], 13: [922, 495], 14: [1113, 435], 16: [664, 620], 18: [975, 628] }; // 18: 구역 7 지도 7-5 (2026-11-04 캡처) // 2026-11-03 구역 2·6 지도 캡처
+  5: [1178, 200], 6: [478, 400], 12: [720, 500], 13: [922, 495], 14: [1113, 435], 16: [664, 620], 18: [975, 628],
+  0: [463, 200] }; // 0: 구역 10 지도 10-3 (2026-11-06 캡처, 왼쪽 위. 없어서 10-3 을 건너뛰고 10-11 만 파밍했다) // 18: 구역 7 지도 7-5 (2026-11-04 캡처) // 2026-11-03 구역 2·6 지도 캡처
 const battle = JSON.parse(fs.readFileSync('/home/user/Github-sibal/offline-server/data/tables/battleTable.json', 'utf8'));
 const CARS_T = JSON.parse(fs.readFileSync('/home/user/Github-sibal/offline-server/data/tables/cars.json', 'utf8')).Car;
 const racePos = (zone, idx) => battle.BattleArea.find((a) => a.Id === 50000 + zone)?.Race.find((r) => r.RaceIndex === idx)?.RacePos;
@@ -359,6 +360,7 @@ async function manage() {
       const PL = JSON.parse(fs.readFileSync('/home/user/Github-sibal/offline-server/data/tables/datingPlaces.json', 'utf8')).Place; // 가격 0 = 데이트 티켓 장소 (티켓 없으면 시작 실패 Result 2, 2026-11-04 43152)
       const places = (ud.DateZone?.Place ?? []).filter((p) => p.State === 1 && p.Placeid >= 41011 && p.Placeid <= 44244 && Number(PL.find((x) => x.Id === p.Placeid)?.Price) > 0).map((p) => p.Placeid);
       const hf = `${OUT}/dateplaces.json`; let hist = {}; try { hist = JSON.parse(fs.readFileSync(hf, 'utf8')); } catch {}
+      let satHist = {}; try { satHist = JSON.parse(fs.readFileSync(`${OUT}/date-sat.json`, 'utf8')); } catch {}
       const want = new Map();
       // 삐친 캐릭터(Emotion 1)는 데이트 한 번으로 풀린다 (실기록 2026-11-05: 20101·20303). 삐침은 동승 효과를 끄므로(20303 은 +616) 먼저 데이트
       // run/peevish-keep.json [캐릭터]: 삐침 방치 실험 대상은 풀지 않는다 (2026-11-06 사용자 승인: 차민 20101, 호감도 하락 관찰)
@@ -398,11 +400,14 @@ async function manage() {
         //   선호 장소(PreferencePlaceA) 알림 인자 '1.5' -> x1.5 로 가정 (추정).
         const famP = (p) => Number(PL.find((x) => x.Id === p)?.Familiarity) || 0;
         const seen = new Set((open(g)?.DatingState ?? []).map((d) => Number(d.Placeid)));
+        // 그 캐릭터가 그 장소에서 받은 직전 만족도(run/date-sat.json)로 가중: 1 -> x0.5 … 5 -> x1.5 (2026-11-06 조은 노래방 만족도 1 세 번, 회당 +120 vs 레스토랑 5 -> +500 안팎)
+        const satF = (p) => { const s = satHist[g]?.[p]; return s == null ? 1 : [0.5, 0.5, 0.75, 1, 1.25, 1.5][Math.max(0, Math.min(5, Number(s)))]; };
         const best = places.filter((p) => p !== last && p !== Number(gd?.DislikePlace) && (Number(PL.find((x) => x.Id === p)?.UnlockFmLevel) || 1) <= famLv(g, fam))
-          .map((p) => [p, famP(p) * (p === Number(gd?.PreferencePlaceA) ? 1.5 : 1) + (seen.has(p) ? 0 : Number(gd?.FirstDatePlaceBonus) || 0)]).sort((a, b) => b[1] - a[1])[0]?.[0];
+          .map((p) => [p, famP(p) * (p === Number(gd?.PreferencePlaceA) ? 1.5 : 1) * satF(p) + (seen.has(p) ? 0 : Number(gd?.FirstDatePlaceBonus) || 0)]).sort((a, b) => b[1] - a[1])[0]?.[0];
         const place = w.place || best || places.find((p) => !h.includes(p) && p !== last) || places.find((p) => p !== last) || 41011;
         const out = require('child_process').execFileSync('node', [__dirname + '/dates.cjs', String(g), String(place)], { encoding: 'utf8', timeout: 120000 });
         const line = out.trim().split('\n').pop(); act(`quest date ${w.q} ${g}@${place}: ${line.slice(0, 160)}`);
+        { const fm = line.match(/"final":(\d)/); if (fm) { satHist[g] = { ...(satHist[g] ?? {}), [place]: Number(fm[1]) }; try { fs.writeFileSync(`${OUT}/date-sat.json`, JSON.stringify(satHist)); } catch {} } }
         if (w.q === 'priority' && /"final":\d/.test(line)) { try { const pf = `${OUT}/date-priority.json`; const pj = JSON.parse(fs.readFileSync(pf, 'utf8')); pj[g] = Math.max(0, (pj[g] ?? 1) - 1); fs.writeFileSync(pf, JSON.stringify(pj)); } catch {} }
         hist[g] = [place, ...h.filter((p) => p !== place)].slice(0, Math.max(1, places.length - 1)); fs.writeFileSync(hf, JSON.stringify(hist));
         n++; await sleep(5000);
