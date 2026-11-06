@@ -708,6 +708,7 @@ async function openGame() {
       if (!res.url().endsWith('/api/rpc')) return;
       const req = JSON.parse(res.request().postData() || '{}');
       if (req.name === 'MsgBattleResultReq') { const j = await res.json(); lastResult = { req: req.body, ans: j.messages?.[0]?.body }; }
+      if (req.name === 'MsgBattleStartReq') { const j = await res.json(); const ri = j.messages?.find((m) => m.name === 'MsgBattleStartAns')?.body?.RaceInfo; globalThis.__raceMode = Number(ri?.RaceMode) || 0; }
     } catch {}
   });
   let hubSeen = false;
@@ -875,14 +876,17 @@ async function playRace(t) {
 }
 async function finishRace(t, tp, phases) {
   globalThis.__resultReqAt = 0;
-  // 시작 전 대화 넘기기
+  // 시작 전 대화 넘기기 (__raceMode 는 시작 응답에서 채워짐: 노드 클릭 뒤 시작 버튼으로 이미 요청이 나간 상태)
   for (let i = 0; i < 60; i++) {
     const st = await evalJ('JSON.stringify(globalThis.__dgRace ? {s: __dgRace.raceState, c: __dgRace.countdown} : null)').then(JSON.parse).catch(() => null);
     if (st && (st.s >= 2 || st.c !== null)) break;
     await page.mouse.click(1240, 672); await sleep(3000);
   }
   // 레이스 끝까지 (최대 12분). 주행이 시작되면 엔진을 고정 간격(0.02초)으로 바로 진행한다 (화면 그리기와 무관, 기록 동일: 오프라인 검증 43.19 = 43.19)
-  const ff = !fs.existsSync(`${OUT}/NOFF`);
+  // 타임어택(시작 응답 RaceInfo.RaceMode 2)은 빨리감기하지 않는다: 2026-11-06 3103-30 두 번 모두 빨리감기 중 22.9초 지점에서
+  //   엔진이 종료(raceState 3)로 넘어간 뒤 결과 화면·요청 없이 멈춤 (남은 제한 시간 22초, 결승 전)
+  const ff = !fs.existsSync(`${OUT}/NOFF`) && globalThis.__raceMode !== 2;
+  if (!ff && globalThis.__raceMode === 2) log('time attack: real-time drive (no fast-forward)');
   for (let i = 0; i < 1440 && !lastResult; i++) {
     // 시작 대기 240초: 할로윈 보스(3103-20 The Yurei)는 로딩만 약 130초 (2026-11-05 확인, 120초 제한으로 '시작 안 됨' 3회)
     if (!raceStartAt && i >= 480) { log('race did not start in 240s'); break; }
