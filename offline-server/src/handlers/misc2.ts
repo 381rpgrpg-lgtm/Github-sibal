@@ -13,7 +13,7 @@ import { register, type Msg } from '../rpc.js';
 import { table, carDefOf, newOwnedCar } from '../gamecalc.js';
 import { grantItem, itemDef } from '../inventory.js';
 import { refreshQuests, questDefs } from '../quests.js';
-import { levelUp } from './battle.js';
+import { levelUp, fuelNow } from './battle.js';
 import { weeklySeason } from './weekly.js';
 import { streetSetName } from '../street.js';
 
@@ -508,3 +508,52 @@ register('MsgGetMileageBoxReq', (_b, ctx): Msg[] => {
   ctx.store.putUser(uid(ctx), snap);
   return [{ name: 'MsgGetMileageBoxAns', body: { Seq: 1, Result: R_OK, UserInfo: ui, RewardInfo: reward } }];
 });
+
+// ── 연료 캐시 충전 MsgBuyFuelReq {} (실기록 없음: 캐시 소비라 실서버에서 시험하지 않았다).
+//   클라이언트 OfferRefillRunout/GetRefillCost: 비용 = trunc((최대 - 현재 연료) x vconst fuelUnitPrice 0.065) 캐시, 확인 뒤 본문 없이 전송.
+//   응답 전용 처리(OnDispatch_MsgBuyFuelAns)가 없어 UserInfo 갱신만 쓰인다. 추정: 연료를 가득 채우고(Fueltime = 지금) 캐시 차감,
+//   캐시 부족 Result 7(다른 캐시 응답과 같은 코드), 이미 가득이면 Result 1 그대로.
+register('MsgBuyFuelReq', (_body, ctx): Msg[] => {
+  const snap = ctx.store.getUser(uid(ctx));
+  if (!snap) return [{ name: 'MsgBuyFuelAns', body: { Seq: 1, Result: R_FAIL } }];
+  const ui = snap.UserInfo;
+  const max = Math.trunc(Number(ui.Fuelvalue) || 0), cur = fuelNow(ui);
+  const unit = Number((table('vconstTable.json')?.Vconst ?? []).find((x: any) => x?.Name === 'fuelUnitPrice')?.Val?.[0]) || 0.065;
+  const cost = Math.max(0, Math.trunc((max - cur) * unit));
+  if (cur >= max) return [{ name: 'MsgBuyFuelAns', body: { Seq: 1, Result: R_OK, UserInfo: ui } }];
+  if ((Number(ui.Cash) || 0) < cost) return [{ name: 'MsgBuyFuelAns', body: { Seq: 1, Result: R_NO_CASH, UserInfo: ui } }];
+  ui.Cash = (Number(ui.Cash) || 0) - cost;
+  ui.Fueltime = Math.floor(Date.now() / 1000);
+  ctx.store.putUser(uid(ctx), snap);
+  return [{ name: 'MsgBuyFuelAns', body: { Seq: 1, Result: R_OK, UserInfo: ui, Cost: { Cash: cost } } }];
+});
+
+// ── 구형 이벤트 누적 보상 수령 MsgEventRaceRewardReq {ZoneId} (실기록 없음).
+//   클라이언트 EventRaceRewardPopup '받기' 버튼. Chapter 가 없는 구형 이벤트 구역에서만 열린다(Reborn 이벤트는 LocalReborn 보상 창, event.ts).
+//   OnDispatch_MsgEventRaceRewardAns: RewardInfo 가 있으면 보상 연출, 그 뒤 onEventRaceRewardAns.
+//   오프라인은 누적 보상을 달성 시점(MsgRaceRewardReq)에 우편으로 이미 보낸다. 여기서는 달성했는데 아직 State 1 인 것만 바로 지급하고
+//   State 2 로 바꾼다 (추정). 받을 것이 없으면 Result 1 + RewardInfo 없음.
+register('MsgEventRaceRewardReq', (body, ctx): Msg[] => {
+  const snap = ctx.store.getUser(uid(ctx));
+  const zid = Number(body?.ZoneId) || 0;
+  const zone = (snap?.RaceZones?.RaceZone ?? []).find((z: any) => Number(z.ZoneId) === zid);
+  if (!snap || !zone) return [{ name: 'MsgEventRaceRewardAns', body: { Seq: 1, Result: R_FAIL } }];
+  const rows: any[] = (table('battleTable.json')?.EventRaceReward ?? []).filter((r: any) => Number(r.ZoneId) === 50000 + zid);
+  const give: { type: number; amount: number }[] = [];
+  for (const ri of zone.RewardInfo ?? []) {
+    const row = rows.find((r) => Number(r.RewardId) === Number(ri.RewardId));
+    if (!row || Number(ri.State) !== 1 || Number(row.Point) > (Number(zone.CurrentPoint) || 0)) continue;
+    ri.State = 2;
+    (row.ItemId ?? []).forEach((it: number, i: number) => give.push({ type: Number(it), amount: Number(row.Amount?.[i]) || 1 }));
+  }
+  const reward = give.length ? giveRewards(snap, give) : null;
+  ctx.store.putUser(uid(ctx), snap);
+  return [{ name: 'MsgEventRaceRewardAns', body: { Seq: 1, Result: R_OK, ZoneId: zid, RewardInfo: reward ?? undefined,
+    RaceZone: [{ ZoneId: zid, CurrentPoint: zone.CurrentPoint ?? 0, RewardInfo: zone.RewardInfo ?? [] }], UserInfo: snap.UserInfo } }];
+});
+
+// ── 히로인 아이템 수리 MsgRepairGirlItemReq {Itemid}: 미구현 (임시 응답).
+//   클라이언트: RepairCash 캐시로 아이템 성능을 RepairMin~RepairMax 만큼 올린다(FITTING_ROOM_Label_11·12), 응답 {Result, UserInfo,
+//   OldGirlItemInfo, NewGirlItemInfo(Attributes), GirlInfo}. 오프라인 서버에는 히로인 아이템 능력치(GirlItemInfo.Attributes) 모델이 없고
+//   실기록도 없어(캐시 소비) 구현하지 않는다. 미구현 오류 대신 Result 2 를 돌려준다 -> 클라이언트는 아무것도 하지 않는다.
+register('MsgRepairGirlItemReq', (): Msg[] => [{ name: 'MsgRepairGirlItemAns', body: { Seq: 1, Result: R_FAIL } }]);
