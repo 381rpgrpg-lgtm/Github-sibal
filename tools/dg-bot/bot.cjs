@@ -885,7 +885,7 @@ async function playRace(t) {
   return await finishRace(t, tp, phases);
 }
 async function finishRace(t, tp, phases) {
-  globalThis.__resultReqAt = 0;
+  globalThis.__resultReqAt = 0; globalThis.__dlgTaps = 0;
   // 시작 전 대화 넘기기 (__raceMode 는 시작 응답에서 채워짐: 노드 클릭 뒤 시작 버튼으로 이미 요청이 나간 상태)
   for (let i = 0; i < 60; i++) {
     const st = await evalJ('JSON.stringify(globalThis.__dgRace ? {s: __dgRace.raceState, c: __dgRace.countdown} : null)').then(JSON.parse).catch(() => null);
@@ -902,6 +902,14 @@ async function finishRace(t, tp, phases) {
     if (!raceStartAt && i >= 480) { log('race did not start in 240s'); break; }
     if (!raceStartAt) {
       const st = await evalJ('globalThis.__dgRace ? __dgRace.raceState : -1').catch(() => -1);
+      // 주행 상태(2)여도 시작 직후 대사가 떠 있으면 차가 서 있다 (2026-11-06 3103-30 Time Attack: 'You've already got this.' 에서
+      //   raceState 2 인 채 12분 정지, 빨리감기면 대사 중에 엔진만 돌아 22.9초에 END). 진행 거리가 늘 때까지 넘김(▶)을 누른다
+      if (st === 2 && (globalThis.__dlgTaps || 0) < 40) {
+        const prog = () => evalJ('(() => { const c = globalThis.__dgRace && __dgRace.playerCar; return c && c.getDistanceProgress ? c.getDistanceProgress() : -1; })()').catch(() => -1);
+        const p0 = await prog(); await sleep(1500); const p1 = await prog();
+        if (p0 >= 0 && p1 >= 0 && p1 <= p0) { if (!globalThis.__dlgStartLogged) { log('race state 2 but the car is not moving: tapping the opening dialogue'); globalThis.__dlgStartLogged = 1; } globalThis.__dlgTaps = (globalThis.__dlgTaps || 0) + 1; await page.mouse.click(1240, 672); await sleep(1500); continue; }
+        globalThis.__dlgStartLogged = 0;
+      }
       if (st === 2) { raceStartAt = Date.now(); tp('go');
         if (ff) await evalJ(`(() => { const r = globalThis.__dgRace; const step = () => { let n = 0; while (r.raceState === 2 && n++ < 200) r.advance(0.02); if (r.raceState === 2) setTimeout(step, 0); }; step(); })()`).catch((e) => log('ff err ' + e)); }
     }
