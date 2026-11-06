@@ -377,6 +377,11 @@ async function manage() {
           if (!gi || Number(gi.NthDate) >= need) continue; }
         if (Number(o.Type) === 4 || Number(o.Type) === 7) { const g = gid(o.Param[1]); const pl = Number(o.Type) === 4 ? Number(o.Param[2]) || 0 : 0;
           if (g && (!want.has(g) || pl)) want.set(g, { q: q.QuestId, place: pl }); }
+        // 이벤트 레이스 실행 목표(Type 1 [횟수, 이벤트 구역])의 참가 조건 캐릭터(BattleArea LimitGirlId·LimitGirlFMLevel)가 단계 미달이면 데이트로 올린다
+        //   (2026-11-06 3001: 지아·차은·조은 모두 4단계여야 시작됨 — 조건 창 실측. 지아만 채워 시작 버튼이 막혔다)
+        if (Number(o.Type) === 1 && Number(o.Param[1]) >= 1000) { const ar = battle.BattleArea.find((a) => a.Id === 50000 + Number(o.Param[1]));
+          (ar?.LimitGirlId ?? []).forEach((g, i) => { const m = (ud.MyGirls?.MyGirlInfo ?? []).find((x) => x.Girlid === g && x.State === 7);
+            if (m && famLv(g, Number(m.Familiarity) || 0) < (Number(ar.LimitGirlFMLevel?.[i]) || 1) && !want.has(g)) want.set(g, { q: `event${o.Param[1]}`, place: 0 }); }); }
       }
       for (const g of unlockDateTargets(ud)) if (!want.has(g)) want.set(g, { q: 'unlock', place: 0 });
       let n = 0;
@@ -930,12 +935,14 @@ async function finishRace(t, tp, phases) {
     if (evObj && !questCar && !globalThis.__noEvent && Number(ud.UserInfo.EventRaceTicket) > 0) {
       const ez = Number(evObj.Param[1]), z = eventZones.find((x) => x.ZoneId === ez);
       const r = (z?.Race ?? []).filter((x) => x.State & 1).sort((a, b) => a.RaceIndex - b.RaceIndex)[0];
-      // 참가 조건(BattleArea LimitGirlId·LimitGirlFMLevel, 예 3001: 20208·20202·20503 호감도 4단계): 하나도 못 맞추면 건너뜀 (2026-11-04 확인: 조건 창이 떠 시작 안 됨)
+      // 참가 조건(BattleArea LimitGirlId·LimitGirlFMLevel, 예 3001: 20208·20202·20503 호감도 4단계): 전부 맞춰야 시작됨
+      //   (2026-11-06 조건 창 실측: 지아만 4단계일 때 '아래 조건을 충족하면 참가' 창이 떠 240초 대기 2회 -> 이전의 '하나라도' 판정은 틀림)
       const ar = battle.BattleArea.find((a) => a.Id === 50000 + ez);
       const lim = (ar?.LimitGirlId ?? []).map((g, i) => [g, Number(ar.LimitGirlFMLevel?.[i]) || 1]);
-      const girlOk = !lim.length || lim.some(([g, lv]) => { const m = (ud.MyGirls?.MyGirlInfo ?? []).find((x) => x.Girlid === g && x.State === 7); return m && famLv(g, Number(m.Familiarity) || 0) >= lv; });
+      const girlOk = !lim.length || lim.every(([g, lv]) => { const m = (ud.MyGirls?.MyGirlInfo ?? []).find((x) => x.Girlid === g && x.State === 7); return m && famLv(g, Number(m.Familiarity) || 0) >= lv; });
       if (!girlOk) { if (!globalThis.__evSkipLogged) log(`event ${ez}: girl fondness condition not met, skip`); globalThis.__evSkipLogged = 1; }
-      else if (r && EVENT_CARD[ez] !== undefined && (EVENT_POS_Z[ez]?.[r.PosId] ?? EVENT_POS[r.PosId]) && !SAFE.progressSkipped(`event:${evObj.Id}:${evObj.ObjId}`)) {
+      // 결과 없음 2회(6시간 건너뛰기) 레이스는 이 경로에서도 제외 (2026-11-06: 건너뛰기 기록 직후 같은 3001-11 을 다시 골랐다)
+      else if (r && !noResSkip().includes(Number(r.RaceId)) && EVENT_CARD[ez] !== undefined && (EVENT_POS_Z[ez]?.[r.PosId] ?? EVENT_POS[r.PosId]) && !SAFE.progressSkipped(`event:${evObj.Id}:${evObj.ObjId}`)) {
         t = { mode: 'event', card: EVENT_CARD[ez], zone: ez, race: r, posId: r.PosId, farm: true, quest: true };
         SAFE.progressTick(`event:${evObj.Id}:${evObj.ObjId}`, qval(evObj), 6);
       }
