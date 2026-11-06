@@ -420,7 +420,7 @@ async function manage() {
           .map((p) => [p, famP(p) * (p === Number(gd?.PreferencePlaceA) ? 1.5 : 1) * satF(p) + (seen.has(p) ? 0 : Number(gd?.FirstDatePlaceBonus) || 0)]).sort((a, b) => b[1] - a[1])[0]?.[0];
         const place = w.place || best || places.filter(okPlace).find((p) => !h.includes(p) && p !== last) || places.filter(okPlace).find((p) => p !== last) || 41011;
         const out = require('child_process').execFileSync('node', [__dirname + '/dates.cjs', String(g), String(place)], { encoding: 'utf8', timeout: 120000 });
-        const line = out.trim().split('\n').pop(); act(`quest date ${w.q} ${g}@${place}: ${line.slice(0, 160)}`);
+        const line = out.trim().split('\n').pop(); act(`quest date ${w.q} ${g}@${place}: ${line.slice(0, 320)}`);
         markDateFail(g, place, line);
         { const fm = line.match(/"final":(\d)/); if (fm && Number(fm[1]) > 0) { satHist[g] = { ...(satHist[g] ?? {}), [place]: Number(fm[1]) }; try { fs.writeFileSync(`${OUT}/date-sat.json`, JSON.stringify(satHist)); } catch {} } }
         if (w.q === 'priority' && /"final":\d/.test(line)) { try { const pf = `${OUT}/date-priority.json`; const pj = JSON.parse(fs.readFileSync(pf, 'utf8')); pj[g] = Math.max(0, (pj[g] ?? 1) - 1); fs.writeFileSync(pf, JSON.stringify(pj)); } catch {} }
@@ -580,7 +580,9 @@ function unlockDateTargets(ud) {
     const crits = GIRLT.GirlUnlockCrit.filter((c) => c.Girlid === n.GirlInfo.Girlid);
     const met = (c) => c.CritType === 1 ? lvOf(c.Parameter1) >= 3 : c.CritType === 2 ? lvOf(c.Parameter1) >= 4 : c.CritType === 8 ? won(c.Parameter1, c.Parameter2) : c.CritType === 4 ? true : null;
     for (const c of crits) if ((c.CritType === 1 || c.CritType === 2) && !met(c) && mine(c.Parameter1)) out.push(c.Parameter1);
-    if (crits.filter((c) => [1, 2, 8].includes(c.CritType)).every((c) => met(c))) for (const c of crits) if (c.CritType === 5 && mine(c.Parameter1)) out.push(c.Parameter1);
+    // 5(X 와 데이트)는 나머지 조건이 모두 충족된 뒤 데이트해야 인정된다. 봇이 판정 못 하는 6·7·9·10(월드 투어·주간 레이스·한계 돌파)이 있으면 데이트하지 않는다
+    //   (2026-11-06: 20505 의 9번 주간 레이스 컷오프를 무시해 20303 과 75회 데이트, 회당 코인 2,100~2,400 낭비)
+    if (crits.filter((c) => c.CritType !== 5).every((c) => met(c) === true)) for (const c of crits) if (c.CritType === 5 && mine(c.Parameter1)) out.push(c.Parameter1);
   }
   return [...new Set(out)];
 }

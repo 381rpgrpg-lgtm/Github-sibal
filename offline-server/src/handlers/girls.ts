@@ -82,8 +82,10 @@ register('MsgCollectFamiliarityReq', (body, ctx): Msg[] => {
   const g = (snap?.MyGirls?.MyGirlInfo ?? []).find((x: any) => Number(x.Girlid) === id && Number(x.State) === GIRL_OPEN);
   const now = Date.now() / 1000;
   if (!snap || !g) return [{ name: 'MsgCollectFamiliarityAns', body: { Result: 2 } }];
-  // 실기록 2026-11-02 (31건): 화난 상태(Emotion 2, 클라이언트 열거형 Block)면 수령 시각이 지났어도 Result 2 (GirlInfo·UserInfo 그대로). Emotion 3 은 Result 1.
-  if (Number(g.NextFamiliarityTime) > now || Number(g.Emotion) === 2)
+  // 실기록 (2026-11-02~06, 수령 시각이 지난 234건): Emotion 2(클라이언트 열거형 Block) 159건·Emotion 1(삐침) 3건은 Result 2
+  //   (GirlInfo·UserInfo 그대로, NextFamiliarityTime 도 안 넘어감). Emotion 0 33건·3 39건은 Result 1.
+  //   삐침 방치 실험(20101, 9.5시간): 그동안 Familiarity 는 줄지 않았고 코인만 못 받음.
+  if (Number(g.NextFamiliarityTime) > now || Number(g.Emotion) === 1 || Number(g.Emotion) === 2)
     return [{ name: 'MsgCollectFamiliarityAns', body: { Result: 2, GirlInfo: g, UserInfo: snap.UserInfo } }];
   const coin = Number(g.NextCoin) || 100;
   snap.UserInfo.Coin = (Number(snap.UserInfo.Coin) || 0) + coin;
