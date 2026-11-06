@@ -582,12 +582,17 @@ function nextRace(ud, skip = new Set()) {
 
 // 파밍 레이스: 이미 이긴 본편 레이스(11~16, 위치 아는 것). 일일 보상 레이스(캐시+1) 우선, 다음은 가장 높은 구역(이동이 짧음)
 //   재승리 = 숙련도 +2, 코인 RewardCoin(600) (실기록 1-12)
+// 2026-11-06: 파밍이 최신 구역의 아슬아슬한 레이스(13-11, 0.08초 차)를 골라 4판 중 3판을 져 연료만 썼다(패배 = 코인 0).
+//   파밍에서 6시간 안에 2번 진 레이스는 6시간 동안 파밍 후보에서 뺀다.
+const FARM_LOSS_F = () => `${OUT}/farm-loss.json`;
+function farmLossy(id) { try { const j = JSON.parse(fs.readFileSync(FARM_LOSS_F(), 'utf8')); const a = (j[id] ?? []).filter((t) => Date.now() - t < 6 * 3600e3); return a.length >= 2; } catch { return false; } }
+function farmLoss(id) { let j = {}; try { j = JSON.parse(fs.readFileSync(FARM_LOSS_F(), 'utf8')); } catch {} j[id] = [...(j[id] ?? []).filter((t) => Date.now() - t < 6 * 3600e3), Date.now()]; try { fs.writeFileSync(FARM_LOSS_F(), JSON.stringify(j)); } catch {} }
 function farmRace(ud) {
   const zones = ud.RaceZones.RaceZone.filter((z) => z.ZoneId < 1000 && !z.Locked);
   const latest = Math.max(...zones.map((z) => z.ZoneId));
   const now = Date.now() / 1000, all = [];
   for (const z of zones) for (const r of z.Race)
-    if (r.State & 16 && r.State & 1 && r.RaceIndex >= 11 && r.RaceIndex <= 19 && POS[racePos(z.ZoneId, r.RaceIndex)])
+    if (r.State & 16 && r.State & 1 && r.RaceIndex >= 11 && r.RaceIndex <= 19 && POS[racePos(z.ZoneId, r.RaceIndex)] && !farmLossy(r.RaceId))
       all.push({ zone: z.ZoneId, race: r, latest, daily: Number(r.DailyRewardTime) > now });
   all.sort((a, b) => (b.daily - a.daily) || (b.zone - a.zone) || (a.race.RaceIndex - b.race.RaceIndex));
   return all[0] ?? null;
@@ -1054,6 +1059,7 @@ async function finishRace(t, tp, phases) {
     let r;
     try { r = await playRace(t); } catch (e) { log('play err ' + e); r = 'err'; }
     if (r !== 'win' && r !== 'lose') SAFE.progressUndo(); // 끝나지 않은 시도는 진척 감시에서 빼기
+    if (r === 'lose' && t.farm && t.race?.RaceId) farmLoss(t.race.RaceId);
     if (r === 'lose' && !t.farm) fails[key] = (fails[key] ?? 0) + 1;
     if (r === 'win' && !t.farm) fails[key] = 0; saveFails();
     if (r === 'noresult' && t.mode === 'event') fs.writeFileSync(`${OUT}/EVENTBLOCK`, new Date().toISOString());
