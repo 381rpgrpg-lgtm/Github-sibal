@@ -392,7 +392,15 @@ async function manage() {
         const sp = PL.find((x) => x.Id === w.place), gd = GIRLT.Girl.find((x) => x.Id === g), fam = Number(open(g)?.Familiarity) || 0;
         //   그 캐릭터의 특별 데이트(girlTable SpecialDate)는 친밀도 SpecialDateCondition 이상이어야 함 (클로디아 40016 = 3600. 미달이면 거절되고 코인 1300 소모, 2026-11-04)
         if (sp && String(sp.SpecialDate) === 'True' && (famLv(g, fam) < Number(sp.RestrictionFamiliarity || 1) || (Number(gd?.SpecialDate) === sp.Id && fam < Number(gd?.SpecialDateCondition || 0)))) w.place = 0;
-        const place = w.place || places.find((p) => !h.includes(p) && p !== last) || places.find((p) => p !== last) || 41011;
+        // 장소 고르기 (2026-11-06 개선): 호감도 = 장소 Familiarity(48~243) + 그 장소 첫 데이트면 FirstDatePlaceBonus(100~126) + 사건.
+        //   감점은 직전 장소 반복과 싫어하는 장소(DislikePlace)뿐이라, 입장 단계(UnlockFmLevel) 안에서 기대 호감도가 큰 곳을 고른다.
+        //   (이전: 장소 번호 순환 -> 41011(+48)처럼 낮은 곳을 자주 감. 20303 실측 41011 +53, 43174 첫 방문 +347)
+        //   선호 장소(PreferencePlaceA) 알림 인자 '1.5' -> x1.5 로 가정 (추정).
+        const famP = (p) => Number(PL.find((x) => x.Id === p)?.Familiarity) || 0;
+        const seen = new Set((open(g)?.DatingState ?? []).map((d) => Number(d.Placeid)));
+        const best = places.filter((p) => p !== last && p !== Number(gd?.DislikePlace) && (Number(PL.find((x) => x.Id === p)?.UnlockFmLevel) || 1) <= famLv(g, fam))
+          .map((p) => [p, famP(p) * (p === Number(gd?.PreferencePlaceA) ? 1.5 : 1) + (seen.has(p) ? 0 : Number(gd?.FirstDatePlaceBonus) || 0)]).sort((a, b) => b[1] - a[1])[0]?.[0];
+        const place = w.place || best || places.find((p) => !h.includes(p) && p !== last) || places.find((p) => p !== last) || 41011;
         const out = require('child_process').execFileSync('node', [__dirname + '/dates.cjs', String(g), String(place)], { encoding: 'utf8', timeout: 120000 });
         const line = out.trim().split('\n').pop(); act(`quest date ${w.q} ${g}@${place}: ${line.slice(0, 160)}`);
         if (w.q === 'priority' && /"final":\d/.test(line)) { try { const pf = `${OUT}/date-priority.json`; const pj = JSON.parse(fs.readFileSync(pf, 'utf8')); pj[g] = Math.max(0, (pj[g] ?? 1) - 1); fs.writeFileSync(pf, JSON.stringify(pj)); } catch {} }
