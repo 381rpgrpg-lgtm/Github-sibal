@@ -12,6 +12,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import type { Ctx, Msg } from '../rpc.js';
 import { table, finalAttr } from '../gamecalc.js';
 import { questEvent, refreshQuests } from '../quests.js';
+import { evalGirlUnlocks } from '../girlunlock.js';
 
 const WEEK = 7 * 86400;
 export const weeklySeason = () => { const t = Math.floor(Date.now() / 1000); return { start: t - (t % WEEK), id: Math.floor(t / WEEK) }; };
@@ -102,6 +103,8 @@ export function weeklyResult(body: any, ctx: Ctx): Msg[] {
   if (win && t > 0 && (!best[pend.id] || t < best[pend.id])) best[pend.id] = t;
   if (!withdraw) questEvent(snap, 1, () => true);
   const questChanges = refreshQuests(snap);
+  // 연락처 해금 조건 9(주간 레이스 컷오프) 재평가: 노드는 GgraphPatch, 캐릭터 레이스 상태는 다음 로그인 데이터로 반영 (girlunlock.ts)
+  const unlock = win ? evalGirlUnlocks(snap) : { nodes: [] as any[] };
   ctx.store.putUser(ctx.session.accountId, snap);
   const set = wraceSet(snap);
   const action = [2, 3, 4, 5, 6].map((a, i) => ({ Action: a, Count: Number([body.MissCnt, body.BadCnt, body.GoodCnt, body.PerfectCnt, body.ExcellentCnt][i]) || 0 }));
@@ -114,7 +117,7 @@ export function weeklyResult(body: any, ctx: Ctx): Msg[] {
       MyTimeRecord: withdraw ? 0 : t, OpponentTimeRecord: 0, LeftBoost: body.LeftBoost ?? 0, MyMaxSpeed: body.LinearMaxSpeed,
       MyMaxDriftSpeed: body.CornerMaxSpeed, Withdraw: withdraw, DeltaInfo: { Charexp: 0, Coin: coin, Cash: 0 },
       BaseCoin: 600, CoinRatio: 1, ...(win ? { RaceCoin: coin } : {}), WraceSet: set, MyWRaceRec: { MyRank: myRank(snap, set.WRace) },
-      MyCarInfo: { ...car, FinalAttr: finalAttr(snap, car) }, GgraphPatch: { Gnode: [] }, UpdateGirlInfo: [],
+      MyCarInfo: { ...car, FinalAttr: finalAttr(snap, car) }, GgraphPatch: { Gnode: unlock.nodes }, UpdateGirlInfo: [],
     },
   }, ...(questChanges.length ? [{ name: 'MsgUpdateNquest', body: { Seq: 2, NquestInfo: questChanges } }] : [])];
 }

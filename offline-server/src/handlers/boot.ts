@@ -5,6 +5,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { dailyReset } from '../daily.js';
 import { register, type Ctx, type Msg } from '../rpc.js';
 import { refreshQuests } from '../quests.js';
+import { evalGirlUnlocks } from '../girlunlock.js';
 
 const SEED = new URL('../../data/userdata-seed.json', import.meta.url).pathname;
 
@@ -62,6 +63,8 @@ register('MsgLoginReq', (_body, ctx): Msg[] => {
   dailyGift(base);
   // LevelUp 은 로그인 데이터에도 그대로 남는다 (실기록 2026-11-02: 레벨업 뒤 다음 레이스 결과 전까지의 모든 로그인)
   refreshQuests(base); // 조건이 맞는 퀘스트를 제시 상태로 (실계정 로그인 데이터에도 State 2 퀘스트가 들어 있음)
+  // 연락처 해금 재평가: 응답 패치가 없는 경로(한계 돌파 = 조건 10, 월드 투어·주간 레이스의 캐릭터 레이스 상태)는 로그인 데이터로 반영 (girlunlock.ts)
+  evalGirlUnlocks(base);
   ctx.store.putUser(ctx.session.accountId, base);
   // 이벤트 공지 팝업(로그인마다 재표시)은 오프라인 기본값에서 끈다. config.showNotices=true 로 켬.
   if (!ctx.showNotices && base.NoticeInfo) base.NoticeInfo = { ...base.NoticeInfo, Notice: [] };

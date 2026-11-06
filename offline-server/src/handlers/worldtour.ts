@@ -14,6 +14,7 @@ import { table, finalAttr, carDefOf, carName, ATTRS, syncGirl } from '../gamecal
 import { nextResetSec } from '../daily.js';
 import { questEvent, refreshQuests } from '../quests.js';
 import { levelUp } from './battle.js';
+import { evalGirlUnlocks, wtBestTier } from '../girlunlock.js';
 
 const R_OK = 1, R_FAIL = 2, R_NO_CASH = 7;
 const vconst = (name: string, def: number): number => {
@@ -363,6 +364,9 @@ export function worldTourResult(body: any, ctx: Ctx): Msg[] {
   mwt.RankPoint = mwt.PvpPoint;
   mwt.SponsorBonus = (Number(mwt.SponsorBonus) || 0) + sponsor;
   applyRank(snap, mwt, win);
+  // 연락처 해금 조건 6·7(월드 투어 골드·플래티넘 도달)용 최고 티어. 시즌이 바뀌어 언랭크로 돌아가도 남긴다 (girlunlock.ts)
+  snap.wtBestTier = wtBestTier(snap);
+  const unlock = evalGirlUnlocks(snap);
 
   const action = [2, 3, 4, 5, 6].map((a, i) => ({ Action: a, Count: Number([body?.MissCnt, body?.BadCnt, body?.GoodCnt, body?.PerfectCnt, body?.ExcellentCnt][i]) || 0 }));
   const raceAction = { Action: action, ComboCount: Number(body?.ComboCount) || 0 };
@@ -399,7 +403,7 @@ export function worldTourResult(body: any, ctx: Ctx): Msg[] {
       MyMaxDriftSpeed: body?.CornerMaxSpeed, Withdraw: withdraw,
       DeltaInfo: { Charexp: xp, Coin: coin, Cash: 0, Token: token, SponsorBonus: sponsor }, BaseCoin: coin, CoinRatio: 1, ...(win ? { RaceCoin: coin } : {}),
       OpponentCarInfo: m.car, OpponentUserInfo: m.user, MyWorldTour: recordOut(mwt), TourResult: tourResult,
-      MyCarInfo: { ...car, FinalAttr: faBefore, DeltaMastery: 0 }, UpdateGirlInfo: updateGirl, GgraphPatch: { Gnode: [] },
+      MyCarInfo: { ...car, FinalAttr: faBefore, DeltaMastery: 0 }, UpdateGirlInfo: updateGirl, GgraphPatch: { Gnode: unlock.nodes },
       ...(win ? { ClearRec: { Grade: grade, Flag: 0 } } : {}),
     },
   }, ...(questChanges.length ? [{ name: 'MsgUpdateNquest', body: { Seq: 2, NquestInfo: questChanges } }] : [])];

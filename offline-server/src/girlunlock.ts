@@ -5,10 +5,18 @@
 //             UnlockCritFlag = 충족한 조건 비트(1 << (Rid-1)), UnlockCritOverride = 그 캐릭터의 조건 행 전체.
 // 조건 종류(text_kr girl_unlock_condition_N): 1 X 호감도 3단계, 2 X 호감도 4단계, 3 장소 데이트 4점 이상, 4 구역 보스 클리어,
 //   5 조건 완료 후 X 와 데이트, 6/7 월드 투어 랭크, 8 구역 P1 의 P2 레이스 클리어, 9 주간 레이스 컷오프.
+//   10 한계 돌파한 히로인 N명 보유 (text_kr girl_unlock_condition_n_count, 클라이언트 GirlUnlockConditionCell case 10).
 //   구현: 1·2·4·8, 5(데이트 종료 시 나머지 조건이 모두 충족돼 있으면 충족). 충족 비트는 노드 GirlInfo.UnlockCritFlag 에 누적.
-//   미충족으로 보는 것: 3·6·7·9·10 (월드 투어·주간 레이스 미구현, 3·10 은 데이터에 쓰임 없음/의미 미확인).
+//   2026-11-06 추가 (실기록 없음, 클라이언트 표시 코드 기준):
+//     6/7: 지금까지 도달한 최고 월드 투어 티어(snap.wtBestTier 또는 현재 RankTier)가 골드(3)/플래티넘(2) 이상. 티어 번호 5 브론즈 … 2 플래티넘.
+//     9: 리그 = Parameter1 + vconst UnlockCrit9Offset(표 0, 없으면 클라이언트 기본 2), 컷오프 = battleTable.CutoffTime[시즌 % WeeklyRaceReward 마지막 Week]
+//        .Track(리그 1) / Track<리그>. 이번 시즌 내 최고 기록(익스퍼트 이상은 하위 레이스 WRaceChild 합산)이 컷오프 이하면 충족.
+//        Parameter2(30·40)는 클라이언트가 쓰지 않아 뜻 미확인 -> 무시 (추정).
+//     10: 기본 등급(girlTable Rarity)보다 등급이 오른 보유 히로인 수 >= Parameter1.
+//   미충족으로 보는 것: 3 (데이터에 쓰임 없음).
 import { table, famLevel } from './gamecalc.js';
 import { newGirlRecord } from './handlers/girls.js';
+import { weeklySeason, wraceTemplate } from './handlers/weekly.js';
 
 let crits: Map<number, any[]> | null = null;
 function critsByGirl(): Map<number, any[]> {
@@ -27,6 +35,40 @@ const zoneOfArea = (snap: any, area: number) => (snap.RaceZones?.RaceZone ?? [])
 const raceWon = (snap: any, area: number, idx: number) =>
   (zoneOfArea(snap, area)?.Race ?? []).some((r: any) => Number(r.RaceIndex) === idx && Number(r.State) & 16);
 
+const vconstNum = (name: string, def: number): number => {
+  const r = (table('vconstTable.json')?.Vconst ?? []).find((x: any) => x?.Name === name);
+  const v = Number(r?.Dval ?? r?.Val?.[0]);
+  return r && Number.isFinite(v) ? v : def;
+};
+/** 지금까지 도달한 가장 높은 월드 투어 티어 (숫자가 작을수록 높음, 6 = 언랭크). */
+export function wtBestTier(snap: any): number {
+  const cur = Number(snap.MyWorldTour?.RankTier) || 6;
+  return Math.min(cur >= 1 ? cur : 6, Number(snap.wtBestTier) || 6);
+}
+/** 조건 9: 주간 레이스 리그 컷오프 통과 (클라이언트 GirlUnlockConditionCell case 9 와 같은 표 계산). */
+function weeklyCutoffPassed(snap: any, p1: number): boolean {
+  const league = p1 + Math.trunc(vconstNum('UnlockCrit9Offset', 2));
+  const bt = table('battleTable.json') ?? {};
+  const rw: any[] = bt.WeeklyRaceReward ?? [];
+  const lastWeek = rw.length ? Number(rw[rw.length - 1].Week) : 0;
+  const season = weeklySeason().id;
+  const idx = lastWeek ? season % lastWeek : -1;
+  const row = idx >= 0 && idx < 8 ? (bt.CutoffTime ?? [])[idx] : null;
+  const cutoff = Number(row?.[league === 1 ? 'Track' : `Track${league}`]) || 0;
+  if (!cutoff) return false;
+  const best: Record<string, number> = snap.wraceBest?.season === season ? (snap.wraceBest.best ?? {}) : {};
+  const w = (wraceTemplate().WRace ?? []).find((x: any) => Number(x.WRaceId) === league);
+  const kids: number[] = Array.isArray(w?.WRaceChild) ? w.WRaceChild.map(Number) : [];
+  const rec = kids.length ? (kids.every((k) => Number(best[k]) > 0) ? kids.reduce((s, k) => s + Number(best[k]), 0) : 0) : Number(best[league]) || 0;
+  return rec > 0 && rec <= cutoff;
+}
+/** 조건 10: 기본 등급보다 등급이 오른(한계 돌파한) 보유 히로인 수. */
+function rankedUpGirls(snap: any): number {
+  const defs: any[] = table('girlTable.json')?.Girl ?? [];
+  return (snap.MyGirls?.MyGirlInfo ?? []).filter((g: any) => Number(g.State) === 7
+    && Number(g.Rarity) > (Number(defs.find((d: any) => Number(d.Id) === Number(g.Girlid))?.Rarity) || 1)).length;
+}
+
 function critMet(snap: any, c: any): boolean {
   const p1 = Number(c.Parameter1), p2 = Number(c.Parameter2);
   const girl = (id: number) => (snap.MyGirls?.MyGirlInfo ?? []).find((g: any) => Number(g.Girlid) === id && Number(g.State) === 7);
@@ -35,6 +77,10 @@ function critMet(snap: any, c: any): boolean {
     case 2: { const g = girl(p1); return !!g && famLevel(p1, Number(g.Familiarity) || 0) >= 4; }
     case 4: return raceWon(snap, p1, 20);
     case 8: return raceWon(snap, p1, p2);
+    case 6: return wtBestTier(snap) <= 3;
+    case 7: return wtBestTier(snap) <= 2;
+    case 9: return weeklyCutoffPassed(snap, p1);
+    case 10: return rankedUpGirls(snap) >= p1;
     default: return false;
   }
 }
