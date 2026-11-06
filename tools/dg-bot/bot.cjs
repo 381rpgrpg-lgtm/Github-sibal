@@ -889,10 +889,18 @@ async function finishRace(t, tp, phases) {
       if (st === 2) { raceStartAt = Date.now(); tp('go');
         if (ff) await evalJ(`(() => { const r = globalThis.__dgRace; const step = () => { let n = 0; while (r.raceState === 2 && n++ < 200) r.advance(0.02); if (r.raceState === 2) setTimeout(step, 0); }; step(); })()`).catch((e) => log('ff err ' + e)); }
     }
+    // 주행이 끝났는데 결과 요청이 없으면 경기 후 대화가 막고 있는 것: 넘김(▶)을 누른다
+    //   (2026-11-06 3103-30 Time Attack: 시작 10:04, 이후 니콜 대화 'You've already got this.' 화면에서 12분 멈춤, 결과 요청 없음)
+    if (raceStartAt) {
+      const st = await evalJ('globalThis.__dgRace ? __dgRace.raceState : -1').catch(() => -1);
+      if (st !== 2) { if (!globalThis.__raceEndAt) globalThis.__raceEndAt = Date.now();
+        else if (Date.now() - globalThis.__raceEndAt > 8000 && i % 6 === 0) { await page.mouse.click(1240, 672); if (!globalThis.__dlgLogged) { log(`after race: no result yet (state ${st}), tapping dialogue`); globalThis.__dlgLogged = 1; } } }
+    }
     await sleep(500);
   }
+  globalThis.__raceEndAt = 0; globalThis.__dlgLogged = 0;
   const grades = await evalJ('JSON.stringify(window.__bot && {g: __bot.grades.map(g=>g.g).join(""), min: __bot.grades.map(g=>g.min), boosts: __bot.boosts||0, smart: !!window.__botSmart})').catch(() => null);
-  if (!lastResult) { log('no result'); await shot('noresult'); return 'noresult'; }
+  if (!lastResult) { const st = await evalJ('JSON.stringify(globalThis.__dgRace ? {s: __dgRace.raceState, c: __dgRace.countdown} : null)').catch(() => 'n/a'); log(`no result (started ${raceStartAt ? 'yes' : 'no'}, race ${st})`); await shot('noresult'); return 'noresult'; }
   const q = lastResult.req, a = lastResult.ans;
   const rec = { at: new Date().toISOString().slice(5, 16), race: t.mode === 'event' ? `event${t.card}` : t.mode === 'weekly' ? 'weekly' : t.mode === 'worldtour' ? 'worldtour' : t.mode === 'duel' ? 'duel' : `${t.zone}-${t.race.RaceIndex}`, id: q.BattleId, win: q.IsPlayerWin, crazy: q.ExcellentCnt,
     great: q.PerfectCnt, good: q.GoodCnt, bad: q.BadCnt, miss: q.MissCnt, ps: q.PerfectStart, nitro: q.NitroUseNum, time: +(q.TimeRecord || 0).toFixed(2),
