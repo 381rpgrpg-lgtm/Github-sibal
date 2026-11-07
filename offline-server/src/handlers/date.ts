@@ -22,6 +22,7 @@
 //   - 종료 대본: 좋아함>싫어함 Good, 같으면 Basic, 적으면 Bad. 채팅 이벤트는 조건(ChatConditionA..C) 충족 중 무작위(튜토리얼은 A)
 //   - 백화점(DateType 3) 데이트는 아래 departmentStart/departmentProgress.
 import { readFileSync, existsSync } from 'node:fs';
+import { markPeevish } from '../peevish.js';
 import { register, type Msg, type Ctx } from '../rpc.js';
 import { bumpProperty, levelUp } from './battle.js';
 import { ensureGirl, expansionReady } from './girls.js';
@@ -551,7 +552,7 @@ function rivalPeevish(snap: any, dated: number): any[] {
       const c = (cnt[id] ??= {});
       c[cond] = (c[cond] ?? 0) + 1;
       if (c[cond] >= val && Number(y.Emotion) !== 1) {
-        y.Emotion = 1; y.CauseOfPeevish = cond; y.SolutionForPeevish = cond;
+        y.Emotion = 1; y.CauseOfPeevish = cond; y.SolutionForPeevish = cond; markPeevish(snap, id);
         if (!out.includes(y)) out.push(y);
       }
     }

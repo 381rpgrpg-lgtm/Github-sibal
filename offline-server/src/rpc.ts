@@ -6,6 +6,7 @@ import type { Session } from './auth.js';
 import type { Upstream } from './upstream.js';
 import { achBefore, achAfter } from './achievements.js';
 import { dailyReset } from './daily.js';
+import { peevishDecay } from './peevish.js';
 import { streetAfter } from './street.js';
 
 export interface Ctx {
@@ -67,7 +68,7 @@ export async function dispatch(name: string, body: any, ctx: Ctx): Promise<{ mes
   // 일일 초기화 (daily.ts): 로그인은 핸들러가 MsgUserData 에 담고, 그 외 요청은 끝에 MsgNotifyEvent 3개를 붙인다
   let daily: ReturnType<typeof dailyReset> = null;
   let preSnap = id && name !== 'MsgLoginReq' ? ctx.store.getUser(id) : null;
-  if (preSnap && id) { daily = dailyReset(preSnap); if (daily) ctx.store.putUser(id, preSnap); }
+  if (preSnap && id) { daily = dailyReset(preSnap); const pv = peevishDecay(preSnap).length; if (daily || pv) ctx.store.putUser(id, preSnap); }
   const pre = preSnap ? achBefore(preSnap) : null;
   preSnap = null;
   const messages = await fn(body, ctx);
