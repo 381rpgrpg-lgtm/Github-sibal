@@ -478,13 +478,27 @@ register('MsgBattleResultReq', (body, ctx: Ctx): Msg[] => {
 });
 
 /** 숙련도 n 증가: MasteryCapacity 까지, 1씩 MasteryAttr 가장 낮은 능력치(동률이면 앞쪽). (기록 3->5, {1,1,1,0}->{2,1,1,1}) */
+// 숙련도 1 점씩: 상한 대비 채운 비율(MasteryAttr / 능력치별 상한)이 가장 낮은 능력치에 (같으면 MaxSpd·Acc·Stab·Drift 순).
+//   능력치별 상한 = cars.json SoftLimitAttrMax1..4 + ExpAttrMax1..4 x ExpansionLevel (1..4 = MaxSpd, Acc, Stab, Drift).
+//   실측 2026-11-08 ★5 11705 한계 돌파 1회 뒤 숙련도 올리기 2회: {53,54,74,87} -> {59,60,82,97} -> {65,66,91,106} (상한 {82,83,115,135})
+//   를 정확히 재현한다. 0 에서 268 까지 채우면 SoftLimitAttrMax {53,54,74,87} 와 같다. 상한 정보가 없는 차는 예전처럼 가장 낮은 값부터.
+const MKEYS = ['AttribMaxSpd', 'AttribAcc', 'AttribStability', 'AttribDrift'];
+function masteryCaps(car: any): number[] | null {
+  const d = carDefOf(car?.Cartype); if (!d) return null;
+  const e = Number(car.ExpansionLevel) || 0;
+  const caps = MKEYS.map((_, i) => (Number(d[`SoftLimitAttrMax${i + 1}`]) || 0) + (Number(d[`ExpAttrMax${i + 1}`]) || 0) * e);
+  return caps.every((c) => c > 0) ? caps : null;
+}
 export function addMastery(car: any, n: number) {
+  const caps = masteryCaps(car);
   for (let i = 0; i < n && (Number(car.Mastery) || 0) < (Number(car.MasteryCapacity) || 0); i++) {
     car.Mastery = (Number(car.Mastery) || 0) + 1;
     car.MasteryAttr ??= { AttribMaxSpd: 0, AttribAcc: 0, AttribStability: 0, AttribDrift: 0 };
-    const keys = ['AttribMaxSpd', 'AttribAcc', 'AttribStability', 'AttribDrift'];
-    const low = keys.reduce((a, k) => ((car.MasteryAttr[k] || 0) < (car.MasteryAttr[a] || 0) ? k : a), keys[0]);
-    car.MasteryAttr[low] = (car.MasteryAttr[low] || 0) + 1;
+    const v = (k: string) => Number(car.MasteryAttr[k]) || 0;
+    const low = caps
+      ? MKEYS.reduce((a, k, j) => (v(k) / caps[j] < v(a) / caps[MKEYS.indexOf(a)] ? k : a), MKEYS[0])
+      : MKEYS.reduce((a, k) => (v(k) < v(a) ? k : a), MKEYS[0]);
+    car.MasteryAttr[low] = v(low) + 1;
     car.DeltaMastery = (Number(car.DeltaMastery) || 0) + 1;
   }
 }

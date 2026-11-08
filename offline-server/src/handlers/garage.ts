@@ -126,16 +126,20 @@ register('MsgSetCurrentCarReq', (body, ctx): Msg[] => {
 //   늘어나는 양 = cars.json Expansion (10602 = 63). 비용 n 은 클라이언트가 계산해 보낸 값을 쓴다(서버 쪽 비용표 미확인).
 //   추정: 한 번만 가능(ExpansionLevel 1 이면 거절), 부품이 모자라면 Result 2.
 //   실기록 2026-11-03 (TOFU++ 10604 ★4, 178/178): 요청 ExpansionCash 28 인데 부품 206 -> 170 (36 소모), MasteryCapacity 178 -> 306 (Expansion 128).
-//   즉 실제 비용은 서버가 정한다. 기록된 등급별 비용(★2 28, ★4 36)을 쓰고, 기록 없는 등급은 클라이언트 값.
-const EXPAND_PARTS: Record<number, number> = { 2: 28, 4: 36 };
+//   즉 실제 비용은 서버가 정한다. 비용 = cars.json ExpCash (★2 10602 28, ★4 10604 36, ★5 11705 53 = 실기록 2026-11-08 부품 199 -> 146).
+//   실측 2026-11-08 ★5 11705 (Lv3, 268/268): MasteryCapacity 268 -> 415 (Expansion 147), 캐시 그대로.
+//   여러 번 가능 (cars.json ExpCount, 11705 = 6). 두 번째부터 비용 = ExpCash + ExpCashDiff x ExpansionLevel 은 추정 (기록 없음).
+//   차량 레벨 조건 없음: 11705 는 Lv3 에서 됐다.
 register('MsgMasteryExpandReq', (body, ctx): Msg[] => {
   const snap = ctx.store.getUser(ctx.session.accountId);
   const car = (snap?.Cars?.CarInfo ?? []).find((c: any) => Number(c.Carid) === Number(body?.CarInfo?.Carid));
-  const grade = Number(car?.Grade) || Number(carDef(car?.Cartype)?.Grade) || 0;
-  const cost = EXPAND_PARTS[grade] ?? (Number(body?.ExpansionCash) || 0);
+  const def = carDef(car?.Cartype) ?? {};
+  const level = Number(car?.ExpansionLevel) || 0;
+  const cost = Number(def.ExpCash) > 0 ? Number(def.ExpCash) + (Number(def.ExpCashDiff) || 0) * level : (Number(body?.ExpansionCash) || 0);
   const parts = (snap?.Items?.ItemInfo ?? []).find((x: any) => Number(x.Itemtype) === 61006);
-  const add = Number(carDef(car?.Cartype)?.Expansion) || 0;
-  if (!snap || !car || !add || Number(car.ExpansionLevel) >= 1 || cost <= 0 || (Number(parts?.Count) || 0) < cost) {
+  const add = Number(def.Expansion) || 0;
+  const full = car && (Number(car.Mastery) || 0) >= (Number(car.MasteryCapacity) || 0);
+  if (!snap || !car || !add || !full || level >= (Number(def.ExpCount) || 1) || cost <= 0 || (Number(parts?.Count) || 0) < cost) {
     console.warn(`[garage] 한계 돌파 거절 ${JSON.stringify(body)}`);
     return [{ name: 'MsgMasteryExpandAns', body: { Seq: 1, Result: R_FAIL, ...(snap ? { UserInfo: snap.UserInfo } : {}) } }];
   }

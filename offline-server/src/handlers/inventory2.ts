@@ -18,11 +18,16 @@ const items = (snap: any): any[] => snap.Items?.ItemInfo ?? [];
 //           + 같은 종류 1 + 다른 종류 1 -> 91+91+45=227, Lv1 필요 182 -> Lv2 Exp 45, 140코인
 //   재료 경험치 = partLevelBases[재료 등급][재료 레벨].MixExp, 다른 Category 는 절반(버림)
 //   비용 = 경험치 합을 10 단위로 올림 (91->100, 136->140)
-//   능력치: Lv2 에서 floor(기본 x 1.15) ({18,0,9,-10} -> {20,0,10,-12}). 레벨당 +0.15 배로 추정.
+//   능력치 = floor(기본 x (1 + 비율 x (레벨 - 1))), 비율은 등급마다 다르다:
+//     ★1: Lv2 {18,0,9,-10} -> {20,0,10,-12} (비율 0.11~0.2, 0.15 로 둠)
+//     ★4: 실측 2026-11-08 37302 {62,62,-31,-31} -> Lv2 {65,65,-33,-33}, Lv3 {69,69,-35,-35}, Lv4 {73,73,-37,-37} = 비율 0.06 정확히
+//     ★2·★3·★5·★6 은 기록이 없어 ★1-★4 사이를 직선으로 잇고(★2 0.12, ★3 0.09) ★5 이상은 ★4 값(0.06)을 쓴다 (추정)
 //   응답 {Result 1, Upgraded{부품 + PrevItemLevel, PrevItemExp}, Consumed[재료], UserInfo}
+const PART_GROWTH: Record<number, number> = { 1: 0.15, 2: 0.12, 3: 0.09, 4: 0.06, 5: 0.06, 6: 0.06 };
 const partAttrs = (def: any, lv: number) => {
   const out: any = {};
-  for (const k of ATTRS) out[k] = Math.floor((Number(def.Attributes?.[k]) || 0) * (1 + 0.15 * (lv - 1)));
+  const r = PART_GROWTH[Number(def.Grade) || 1] ?? 0.06;
+  for (const k of ATTRS) out[k] = Math.floor((Number(def.Attributes?.[k]) || 0) * (1 + r * (lv - 1)));
   return out;
 };
 register('MsgCombinePartsReq', (body, ctx): Msg[] => {
