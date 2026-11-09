@@ -1,6 +1,7 @@
+import { createRequire as __cr } from 'module'; const DGP = __cr(import.meta.url)('./paths.cjs');
 // 차량 x 동승 캐릭터 조합별 총 성능 (오프라인 서버 gamecalc.finalAttr: 실기록과 일치 검증된 계산). node perf.mjs <ud.json> [위 몇 개]
 import { readFileSync } from 'node:fs';
-const { finalAttr } = await import('/home/user/Github-sibal/offline-server/dist/gamecalc.js');
+const { finalAttr } = await import(DGP.url('dist/gamecalc.js'));
 const ud = JSON.parse(readFileSync(process.argv[2], 'utf8'));
 const top = Number(process.argv[3]) || 5;
 const sum = (a) => Object.values(a).reduce((x, y) => x + (Number(y) || 0), 0);

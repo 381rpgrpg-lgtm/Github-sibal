@@ -1,10 +1,11 @@
+const DGP = require('./paths.cjs');
 // 데이트 1회 (RPC, 중계 서버 경유). node dates.cjs <girlId> <placeId>
 // 흐름(실기록 2026-11-01~02): Propose -> Start(장소) -> 서버가 준 대본의 Index 표지를 차례로 진행.
 //   SEL_END Index n(문항) = {Depth 0, Index n, AnswerSelect 좋아하는 답}, 표지만 있는 Index n = {Depth 0, Index n},
 //   중간 사건(Index 5, 채팅·선물) = {Depth 1, Index 5[, AnswerSelect]} 을 다음 차례로 끼워 넣는다.
 const fs = require('fs');
 const B = 'http://localhost:8080';
-const liked = JSON.parse(fs.readFileSync('/home/user/Github-sibal/offline-server/src/data/date-answers.json', 'utf8')).liked;
+const liked = JSON.parse(fs.readFileSync(DGP.srv('src/data/date-answers.json'), 'utf8')).liked;
 // 실제 반응으로 배운 답 (run/date-learned.json): 표는 반응 대사 비교 추정이라 틀린 칸이 있다 (2026-11-05: 20303 Date_Restaurant lv2 두 문항 -> 화남).
 //   싫어함(ActionResult 1)이면 다른 답을, 좋아함(3)이면 그 답을 기록하고 표보다 먼저 쓴다
 const LEARN = __dirname + '/run/date-learned.json';

@@ -1,3 +1,4 @@
+const DGP = require('./paths.cjs');
 // 1회성 부품 강화 (2026-11-08). 사용자: "봇의 진전이 너무 막힌다 싶으면 얻는 캐시의 양을 고려해서 과하지 않게 적절히 사용. 봇 말고 네 판단으로만"
 //   13-14 (상대 40.19~40.21, 최고 40.35) 는 가속(Acc) 이 기록을 가장 많이 바꾼다 (설정 시험 7건: Acc 589 -> 759 에 약 -0.15 초).
 //   부품은 강화하면 레벨당 기본 능력치의 약 15% 씩 오른다 (오프라인 서버 실측 Lv2 1건, 그 위는 추정 -> 이 스크립트가 실제 값을 남긴다).
@@ -8,7 +9,7 @@
 //   - 72005 구매: 상점 표에 Gold Cash·실결제 가격이 없고 PriceCash 20 인지, 캐시가 400 이상 남는지, 구매 뒤 감소가 정확히 20 인지
 const S = require('./safety.cjs'); S.init(__dirname + '/run', (s) => console.log(s));
 const fs = require('fs'); const B = 'http://localhost:8080';
-const T = '/home/user/Github-sibal/offline-server/data/tables/';
+const T = (DGP.srv('data/tables') + '/');
 const PT = new Map(JSON.parse(fs.readFileSync(T + 'parts.json', 'utf8')).Part.map((p) => [p.Id, p]));
 const TARGET = { Itemid: 266, Itemtype: 37302 };                      // 차량 10 의 BH챔피언쉽 엔진 ★4 (MaxSpd 62, Acc 62)
 const ALLOW4 = { 185: 32341, 270: 32312, 264: 36312, 268: 34341, 258: 33301 }; // 남는 ★4: 같은 분류에 같거나 나은 부품이 따로 있음
@@ -51,7 +52,7 @@ const mode = process.argv[2] || 'plan';
     console.log('after', desc(tgt()));
   }
   if (mode === 'buy') {
-    const { readTable } = await import('/home/user/Github-sibal/offline-server/dist/upserts.js');
+    const { readTable } = await import(DGP.url('dist/upserts.js'));
     const si = readTable(T + 'itemTable.json', 'itemTable.json').StoreItem.find((s) => s.Id === 72005);
     const bad = !si || Number(si.PriceCash) !== 20 || ['PriceGoldCash', 'PriceRealMoney', 'PriceRealMoneyInt', 'PriceRealMoneyJP', 'PriceCoin'].some((k) => si[k] !== undefined);
     const cash0 = Number(ud.UserInfo.Cash);

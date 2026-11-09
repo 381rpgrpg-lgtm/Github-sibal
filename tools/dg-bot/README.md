@@ -4,11 +4,16 @@
 관리 작업은 RPC 로 직접, 레이스는 헤드리스 Chromium 의 실제 클라이언트로 플레이한다. 비밀번호는 저장소에 없다
 (`start-all.sh` 가 실행 시 스크래치패드의 `probe/dg.py` 에서 읽는다. 코드의 `password: 'x'` 는 로컬 중계 서버용 자리값).
 
-## 복원
-스크립트는 작업 폴더를 절대 경로로 쓴다 (`start-all.sh`·`keepalive.sh` 의 `S=...`, 각 파일의 `/home/user/Github-sibal/...`).
-새 환경에서는 이 폴더를 스크래치패드의 `bot/` 로 복사하고 `S=` 경로를 맞춘 뒤 `start-all.sh` 로 띄운다.
-필요 데이터(저장소 밖, gitignore): `offline-server/data/tables`·`data/client`, `offline-server/src/data/date-answers.json`,
-레이스 후킹 엔진 `engine-race.js` (스크래치패드).
+## 복원 (2026-11-09 개정: Windows·macOS·Linux 공통)
+경로는 `paths.cjs` 가 찾는다: 환경 변수 `DG_SERVER_DIR` > 저장소 배치(`tools/dg-bot` 기준 `../../offline-server`) > 예전 클라우드 경로.
+1. 오프라인 서버: `cd offline-server && npm ci && npm run build`. 데이터(gitignore)는 비공개 보존 저장소의 `offline-server-data/` 를 `offline-server/data/` 로,
+   `offline-server-src-data/` 를 `offline-server/src/data/` 로 복사한다.
+2. 봇: `cd tools/dg-bot && npm ci`(또는 `npm i`) `&& npx playwright install chromium`. 파이썬 3 + Pillow (`pip install pillow`, 실행 파일은 `DG_PYTHON`).
+3. 상태: 보존 저장소 `scratch/bot-run/` 를 `tools/dg-bot/run/` 으로, `scratch/engine-race.js` 를 `tools/dg-bot/engine-race.js` 로 복사.
+4. 비밀번호는 파일에 두지 않는다: 환경 변수 `DG_PASSWORD` 로 넘긴다 (`DG_LOGIN` 기본 damissi).
+5. `node supervisor.cjs --check` 로 점검 → `node supervisor.cjs` 로 운영 (중계 서버 + 봇 루프 + 재시작 감시, `run/STOP` 이면 끝).
+   리눅스 클라우드에서 쓰던 `start-all.sh`·`run.sh`·`keepalive.sh` 는 같은 일을 하는 예전 스크립트다.
+같은 계정으로 봇 두 개를 동시에 돌리지 않는다 (로그인이 서로 끊긴다).
 
 ## 구성
 - `bot.cjs` 본체 (관리 작업 + 레이스 루프), `driver4.js` 레이스 입력, `dates.cjs` 데이트 1회(백화점 포함), `findnew.py` 이벤트 지도 NEW 표식

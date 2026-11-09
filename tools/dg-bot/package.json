@@ -1,0 +1,13 @@
+{
+  "name": "dg-bot",
+  "private": true,
+  "description": "Drift Girls live-account bot (runs through the offline-server relay on localhost:8080)",
+  "scripts": {
+    "check": "node supervisor.cjs --check",
+    "start": "node supervisor.cjs",
+    "test": "node test-safety.cjs"
+  },
+  "dependencies": {
+    "playwright": "1.63.0"
+  }
+}

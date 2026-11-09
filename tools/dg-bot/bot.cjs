@@ -1,3 +1,4 @@
+const DGP = require('./paths.cjs');
 // 무인 진행 봇: 중계 서버(localhost:8080, DG_RECORD_ALWAYS='*')를 통해 실계정으로
 //  (1) 관리 작업은 RPC 로 직접 (레이스 보상 수령, 퀘스트 수락·완료, 업적·기억·우편·일일미션·친밀도 수령, 재료 구매·강화)
 //  (2) 레이스는 실제 클라이언트(헤드리스 Chromium)로 플레이 — 판정·기록은 게임 엔진이 계산, 봇은 버튼 누르는 시점만 정한다.
@@ -11,7 +12,7 @@ const OUT = process.argv[2];
 //              Date_VIPClub at levels 1-4). Coins are spent (bar 2400) and nothing is gained -> never pick those places.
 //   event    - a story chat (Date_Event_Chat_*) replaces the date and ends in BREAK. No familiarity, but it unlocks girl
 //              memories with claimable rewards -> normal progress, do not avoid it.
-const DATE_REFUSE = (() => { const set = new Set(); try { const rows = JSON.parse(fs.readFileSync('/home/user/Github-sibal/offline-server/data/scripts.json', 'utf8'));
+const DATE_REFUSE = (() => { const set = new Set(); try { const rows = JSON.parse(fs.readFileSync(DGP.srv('data/scripts.json'), 'utf8'));
   for (const r of (Array.isArray(rows) ? rows : Object.values(rows).find(Array.isArray) || [])) if (r.Function === 'BREAK' && /^Date_/.test(r.ScriptName) && !/^Date_(Event|End|Boring|Start|Special)/.test(r.ScriptName)) set.add(`${r.Id}|${r.ScriptName}|${r.FamiliarityLv}`); } catch {} return set; })();
 const placeRefused = (g, scriptName, lv) => DATE_REFUSE.has(`${g}|${scriptName}|${lv}`) || DATE_REFUSE.has(`${g}|${scriptName}|-1`);
 const DATE_FAIL_F = () => `${OUT}/date-fail.json`; // per girl|place refusals seen live (safety net for scripts the table misses)
@@ -32,8 +33,8 @@ const POS = { 1: [655, 240], 2: [828, 250], 3: [975, 250], 4: [1093, 275], 7: [5
   10: [1213, 320], 11: [578, 470], 15: [490, 585], 17: [828, 600], 19: [1077, 570],
   5: [1178, 200], 6: [478, 400], 12: [720, 500], 13: [922, 495], 14: [1113, 435], 16: [664, 620], 18: [975, 628],
   0: [463, 200], 20: [1213, 572] }; // 20: 구역 14 지도 14-2 (2026-11-08 캡처 run/map-z14.png, 오른쪽 아래. 14-1=13·14-3=14·14-4=3 좌표와 일치 확인) // 0: 구역 10 지도 10-3 (2026-11-06 캡처, 왼쪽 위. 없어서 10-3 을 건너뛰고 10-11 만 파밍했다) // 18: 구역 7 지도 7-5 (2026-11-04 캡처) // 2026-11-03 구역 2·6 지도 캡처
-const battle = JSON.parse(fs.readFileSync('/home/user/Github-sibal/offline-server/data/tables/battleTable.json', 'utf8'));
-const CARS_T = JSON.parse(fs.readFileSync('/home/user/Github-sibal/offline-server/data/tables/cars.json', 'utf8')).Car;
+const battle = JSON.parse(fs.readFileSync(DGP.srv('data/tables/battleTable.json'), 'utf8'));
+const CARS_T = JSON.parse(fs.readFileSync(DGP.srv('data/tables/cars.json'), 'utf8')).Car;
 const racePos = (zone, idx) => battle.BattleArea.find((a) => a.Id === 50000 + zone)?.Race.find((r) => r.RaceIndex === idx)?.RacePos;
 
 // 보호 차량: 현재 차량, Lv5 이상, 한계 돌파, ★3 이상, 현재 차량보다 높은 등급, 현재 차량과 같은 차종 계열(예 106xx) — 재료·분해 금지
@@ -90,8 +91,8 @@ const TIDY_SKIP = {}; // Itemtype -> 다시 시도할 시각 (사용 거절 시)
 let ITEMT = null;
 async function itemTables() {
   if (!ITEMT) {
-    const D = '/home/user/Github-sibal/offline-server/data/tables/';
-    const { readTable } = await import('/home/user/Github-sibal/offline-server/dist/upserts.js');
+    const D = (DGP.srv('data/tables') + '/');
+    const { readTable } = await import(DGP.url('dist/upserts.js'));
     const t = readTable(D + 'itemTable.json', 'itemTable.json');
     ITEMT = { item: new Map(t.Item.map((i) => [i.Id, i])), store: new Map(t.StoreItem.map((s) => [s.Id, s])),
       parts: new Set(JSON.parse(fs.readFileSync(D + 'parts.json', 'utf8')).Part.map((p) => p.Id)),
@@ -187,7 +188,7 @@ async function manage() {
   // 아이템 칸 확보 (위 tidyItems). 부품 상자를 열면 부품이 늘어나므로 부품 칸 정리보다 먼저
   try { ud = await tidyItems(ud); } catch (e) { log('item tidy error ' + e.message); }
   // 부품 칸 확보: 레이스 보상 부품이 들어갈 칸이 없으면 시작이 막힌다 (부품 화면으로 이동). 빈 칸 2개 유지, 장착 안 된 ★1 부품부터 판다
-  { const parts = JSON.parse(fs.readFileSync('/home/user/Github-sibal/offline-server/data/tables/parts.json', 'utf8')).Part;
+  { const parts = JSON.parse(fs.readFileSync(DGP.srv('data/tables/parts.json'), 'utf8')).Part;
     const inv = (ud.Items?.ItemInfo ?? []).filter((it) => parts.some((p) => p.Id === it.Itemtype));
     // 칸 = 장착 안 된 부품 수 기준 (2026-11-04: 미장착 11 / PartsSlotNum 8 에서 이벤트 레이스가 '부품 보관함이 가득' 으로 시작 안 됨)
     //   파는 순서: ★1·★2 (낮은 등급·능력치 합 순) -> 같은 종류가 둘 이상인 ★3 의 남는 것. ★4 이상과 종류별 마지막 1개는 팔지 않는다
@@ -222,8 +223,8 @@ async function manage() {
     } catch (e) { log('feed parts err ' + e.message); }
     if (sell.length) { const d = pick(await rpc('MsgSellPartsReq', { Itemid: sell.map((x) => x.Itemid) }), 'MsgDeleteParts'); act(`sell parts (slots) ${sell.map((x) => x.Itemtype)}: deleted ${(d?.ItemInfo ?? []).length}`); } }
   // 퀘스트: 수락(2->3), 완료(6->7), 상점 구매형 목표(28: 코인·소셜포인트 상품) 수행
-  const quests = JSON.parse(fs.readFileSync('/home/user/Github-sibal/offline-server/data/tables/nquests.json', 'utf8')).Quest;
-  const items = JSON.parse(fs.readFileSync('/home/user/Github-sibal/offline-server/data/tables/itemTable.json', 'utf8')).StoreItem;
+  const quests = JSON.parse(fs.readFileSync(DGP.srv('data/tables/nquests.json'), 'utf8')).Quest;
+  const items = JSON.parse(fs.readFileSync(DGP.srv('data/tables/itemTable.json'), 'utf8')).StoreItem;
   for (const q of ud.NquestInfos?.NquestInfo ?? []) {
     if (q.State === 2) { await rpc('MsgUpdateNquestReq', { NquestInfo: { QuestId: q.QuestId, State: 3 } }); act(`quest accept ${q.QuestId}`); }
     if (q.State === 6) { const a = pick(await rpc('MsgUpdateNquestReq', { NquestInfo: { QuestId: q.QuestId, State: 7 } }), 'MsgUpdateNquestAns'); act(`quest reward ${q.QuestId}: ${JSON.stringify(a?.RewardInfo ?? null).slice(0, 120)}`); }
@@ -235,7 +236,7 @@ async function manage() {
         if (Number(o.Type) === 24 && cur && q.State === 3 && cur.CurrentValue < Number(o.Param[0])) {
           for (let n = cur.CurrentValue; n < Number(o.Param[0]); n++) {
             const u2 = pick(await rpc('MsgLoginReq'), 'MsgUserData');
-            const parts = JSON.parse(fs.readFileSync('/home/user/Github-sibal/offline-server/data/tables/parts.json', 'utf8')).Part;
+            const parts = JSON.parse(fs.readFileSync(DGP.srv('data/tables/parts.json'), 'utf8')).Part;
             const g = (it) => parts.find((p) => p.Id === it.Itemtype)?.Grade ?? 0;
             const inv = (u2.Items?.ItemInfo ?? []).filter((it) => parts.some((p) => p.Id === it.Itemtype));
             const tgt = inv.find((it) => g(it) >= Number(o.Param[1] || 1) && !(it.Equipcarid > 0)) ?? inv.find((it) => g(it) >= Number(o.Param[1] || 1));
@@ -328,7 +329,7 @@ async function manage() {
             // 부품 칸 확보 (PartSlotNeed): 장착 안 된 ★1 부품을 판다 (실서버: 칸이 모자라면 Result 8)
             if (si.PartSlotNeed) {
               const u2 = pick(await rpc('MsgLoginReq'), 'MsgUserData');
-              const parts = JSON.parse(fs.readFileSync('/home/user/Github-sibal/offline-server/data/tables/parts.json', 'utf8')).Part;
+              const parts = JSON.parse(fs.readFileSync(DGP.srv('data/tables/parts.json'), 'utf8')).Part;
               const inv = (u2.Items?.ItemInfo ?? []).filter((it) => parts.some((p) => p.Id === it.Itemtype));
               const over = inv.length + Number(si.PartSlotNeed) - Number(u2.UserInfo.PartsSlotNum || 8);
               const sell = inv.filter((it) => !(it.Equipcarid > 0) && !it.IsLocked && (parts.find((p) => p.Id === it.Itemtype)?.Grade ?? 9) === 1).slice(0, Math.max(0, over));
@@ -394,6 +395,7 @@ async function manage() {
       }
     }
   } catch (e) { log('date err ' + String(e).slice(0, 200)); }
+  try { if (await lbDrive(ud)) ud = pick(await rpc('MsgLoginReq'), 'MsgUserData'); } catch (e) { log('lb err ' + String(e).slice(0, 200)); }
   // 퀘스트 데이트: 목표 Type 4 [횟수, 캐릭터, 장소?, 최소 평가] / Type 7 [1, 캐릭터, '', 호감 단계] (데이트로 호감 상승).
   //   장소가 정해져 있으면 그 장소, 아니면 그 캐릭터와 최근에 안 간 장소 순환 (같은 장소 반복은 평가 3으로 떨어짐, 실측 2026-11-03).
   //   한 번 관리에 최대 3회, 코인 2만 이상일 때만. 쿨타임 지난 캐릭터만.
@@ -401,7 +403,7 @@ async function manage() {
     if (ud.UserInfo.Coin > 20000) {
       const nowS = Date.now() / 1000, gid = (p) => (p === '[FIRSTGIRL]' ? Number(ud.UserInfo.FirstGirl) : Number(p));
       const open = (id) => (ud.MyGirls?.MyGirlInfo ?? []).find((g) => g.Girlid === id && g.State === 7 && !(Number(g.DateCoolTime) > nowS - 5));
-      const PL = JSON.parse(fs.readFileSync('/home/user/Github-sibal/offline-server/data/tables/datingPlaces.json', 'utf8')).Place; // 가격 0 = 데이트 티켓 장소 (티켓 없으면 시작 실패 Result 2, 2026-11-04 43152)
+      const PL = JSON.parse(fs.readFileSync(DGP.srv('data/tables/datingPlaces.json'), 'utf8')).Place; // 가격 0 = 데이트 티켓 장소 (티켓 없으면 시작 실패 Result 2, 2026-11-04 43152)
       const places = (ud.DateZone?.Place ?? []).filter((p) => p.State === 1 && p.Placeid >= 41011 && p.Placeid <= 44244 && Number(PL.find((x) => x.Id === p.Placeid)?.Price) > 0).map((p) => p.Placeid);
       const hf = `${OUT}/dateplaces.json`; let hist = {}; try { hist = JSON.parse(fs.readFileSync(hf, 'utf8')); } catch {}
       let satHist = {}; try { satHist = JSON.parse(fs.readFileSync(`${OUT}/date-sat.json`, 'utf8')); } catch {}
@@ -430,6 +432,7 @@ async function manage() {
             if (m && famLv(g, Number(m.Familiarity) || 0) < (Number(ar.LimitGirlFMLevel?.[i]) || 1) && !want.has(g)) want.set(g, { q: `event${o.Param[1]}`, place: 0 }); }); }
       }
       for (const g of unlockDateTargets(ud)) if (!want.has(g)) want.set(g, { q: 'unlock', place: 0 });
+      for (const g of lbDateTargets(ud)) if (!want.has(g)) want.set(g, { q: 'limitbreak', place: 0 });
       let n = 0;
       for (const [g, w] of want) {
         if (n >= 3 || !open(g)) continue;
@@ -511,7 +514,7 @@ async function manage() {
       }
     }
     // 넘치지 않게: 필요한 경험치까지만 재료를 넣는다 (작은 것부터)
-    const LVT = JSON.parse(fs.readFileSync('/home/user/Github-sibal/offline-server/data/tables/carLevelTable.json', 'utf8')).CarLevels;
+    const LVT = JSON.parse(fs.readFileSync(DGP.srv('data/tables/carLevelTable.json'), 'utf8')).CarLevels;
     const lvRow = (g, l) => LVT.find((x) => x.Grade === g)?.CarLevel.find((r) => r.Level === l) ?? {};
     const matExp = (c) => Number(lvRow(carGradeOf(c), Number(c.UpgradeLevel) || 1).MaterialExp) || 0;
     let need = target ? -(Number(target.CarExp) || 0) : 0;
@@ -555,7 +558,7 @@ async function manage() {
   //   그 차에 이미 단 분류(Category)는 제외 (한 차에 분류당 1개). MsgEquipPartsReq {Itemid, Equipindex, Equipcarid} -> MsgChangeParts
   try {
     const u3 = pick(await rpc('MsgLoginReq'), 'MsgUserData');
-    const PT = new Map(JSON.parse(fs.readFileSync('/home/user/Github-sibal/offline-server/data/tables/parts.json', 'utf8')).Part.map((p) => [p.Id, p]));
+    const PT = new Map(JSON.parse(fs.readFileSync(DGP.srv('data/tables/parts.json'), 'utf8')).Part.map((p) => [p.Id, p]));
     const carId = u3.UserInfo.Currentcar, car = u3.Cars.CarInfo.find((c) => c.Carid === carId);
     const items = (u3.Items?.ItemInfo ?? []).filter((i) => PT.has(i.Itemtype));
     const eq = items.filter((i) => i.Equipcarid === carId);
@@ -565,7 +568,7 @@ async function manage() {
     //   캐시가 들지 않고 코인이 6만 이상 남을 때만 연다. 조회 결과는 오프라인 서버 비용표 자료로 run/samples-slot.jsonl 에 남긴다.
     //   열 수 없으면(Result 2·18) 그 차는 6시간 다시 묻지 않는다 (run/slot-skip.json)
     try {
-      const CT = new Map(JSON.parse(fs.readFileSync('/home/user/Github-sibal/offline-server/data/tables/cars.json', 'utf8')).Car.map((c) => [c.Id, c]));
+      const CT = new Map(JSON.parse(fs.readFileSync(DGP.srv('data/tables/cars.json'), 'utf8')).Car.map((c) => [c.Id, c]));
       const maxSlot = Number(CT.get(car?.Cartype)?.Slot) || 1, cur = Number(car?.SlotNum) || 1;
       let skip = {}; try { skip = JSON.parse(fs.readFileSync(`${OUT}/slot-skip.json`, 'utf8')); } catch {}
       if (car && cur < maxSlot && !(skip[carId] > Date.now())) {
@@ -622,8 +625,8 @@ async function manage() {
 // 캐릭터 연락처 해금 조건(girlTable GirlUnlockCrit)에서 데이트가 필요한 캐릭터: 관계도 노드 State 5(일부 충족)인 캐릭터의
 //   조건 1·2 [캐릭터 X 호감도 3·4단계] 미충족이면 X, 조건 5 [나머지 충족 뒤 X 와 데이트]는 1·2·8 이 다 충족됐으면 X.
 //   (예 20206 주아: 7-15 승리 + 20102·20107 호감도 3단계 + 20107 데이트 -> 7-26 캐릭터 레이스 -> 연락처 -> 8-1 퀘스트 10706)
-const GIRLT = JSON.parse(fs.readFileSync('/home/user/Github-sibal/offline-server/data/tables/girlTable.json', 'utf8'));
-const GITEM = JSON.parse(fs.readFileSync('/home/user/Github-sibal/offline-server/data/tables/girlItemTable.json', 'utf8')).GirlItemInfo;
+const GIRLT = JSON.parse(fs.readFileSync(DGP.srv('data/tables/girlTable.json'), 'utf8'));
+const GITEM = JSON.parse(fs.readFileSync(DGP.srv('data/tables/girlItemTable.json'), 'utf8')).GirlItemInfo;
 function famLv(id, fam) { const d = GIRLT.Girl.find((x) => x.Id === id) ?? {}; let edge = 0, lv = 1;
   for (const sct of [d.FamiliaritySection1 ?? 400, d.FamiliaritySection2 ?? 230, d.FamiliaritySection3 ?? 1300]) { edge += Number(sct); if (fam >= edge) lv++; else break; } return Math.min(lv, 4); }
 // 본편 경주의 호감도 조건 (서버가 시작을 거절하고 팝업만 띄운다, 표에는 없음). text_en server_popup_EP{구역}-{n}_condtion: 그 캐릭터 호감도 3단계 이상.
@@ -638,6 +641,59 @@ function fondNeed(ud, zone, idx) {
 function fondSkip(ud) {
   const out = [];
   for (const z of ud.RaceZones.RaceZone) if (z.ZoneId < 1000 && !z.Locked) for (const r of z.Race) if (r.State & 1 && !(r.State & 16) && fondNeed(ud, z.ZoneId, r.RaceIndex).length) out.push(r.RaceId);
+  return out;
+}
+// 한계 돌파 몰이 (2026-11-09): 14-15 의 Kacha(20504) 해금 조건 = Nikki(20103) 호감도 4, 그 Nikki 해금 조건 10 = '한계 돌파한 히로인 7명 보유'
+//   (Anna 20106 쪽 20502 는 9명). 지금 1명(20404). ★1 -> ★2 는 확장 코인 8,200 + 백화점 액세서리 4개·수영복 약 12,000 코인으로 가장 싸다.
+//   대상: run/lb-targets.json [캐릭터...] (없으면 아래 기본 6명). 공통 조건(클라이언트 GirlExpansionPopup): 호감도 4단계, 기분 3, 첫 수영복 보유.
+//   개별 조건 중 봇이 판정 못 하는 것(14 승리 수, 16 레이스 수 등)은 서버 판정에 맡기고, 거절되면 그 캐릭터는 6시간에 한 번만 다시 시도한다.
+const LB_DEFAULT = [20105, 20102, 20302, 20207, 20405, 20101];
+function lbTargets(ud) {
+  let list = LB_DEFAULT; try { list = JSON.parse(fs.readFileSync(`${OUT}/lb-targets.json`, 'utf8')); } catch {}
+  const broken = (ud.MyGirls?.MyGirlInfo ?? []).filter((g) => g.State === 7 && Number(g.Rarity) > Number(GIRLT.Girl.find((x) => x.Id === g.Girlid)?.Rarity ?? 9)).length;
+  if (broken >= 9) return { broken, list: [] };
+  return { broken, list: list.map((id) => (ud.MyGirls?.MyGirlInfo ?? []).find((g) => g.Girlid === id && g.State === 7)).filter((g) => g && Number(g.Rarity) === Number(GIRLT.Girl.find((x) => x.Id === g.Girlid)?.Rarity)) };
+}
+async function lbDrive(ud) {
+  const { broken, list } = lbTargets(ud); if (!list.length) return false;
+  const nowS = Date.now() / 1000; let did = false;
+  const deptOpen = famLv(Number(ud.UserInfo.FirstGirl), Number((ud.MyGirls?.MyGirlInfo ?? []).find((x) => x.Girlid === Number(ud.UserInfo.FirstGirl))?.Familiarity) || 0) >= 3;
+  for (const g of list) {
+    const gid = g.Girlid, gdef = GIRLT.Girl.find((x) => x.Id === gid) ?? {}, lv = famLv(gid, Number(g.Familiarity) || 0);
+    const set = (gdef.SGirlExpansionCritSet ?? []).find((x) => Number(x.TargetRarity) === Number(g.Rarity) + 1); if (!set) continue;
+    const bikini = (GITEM.find((i) => i.GirlId === gid && i.Slot === 10 && Number(i.SellPrice) < 0 && i.Id % 100 === 11) ?? {}).Id;
+    const hasBikini = (ud.GirlItems?.GirlItemInfo ?? []).some((x) => x.ItemType === bikini);
+    const flag = Number(g.ItemFlag) || 0, coin = Number(ud.UserInfo.Coin);
+    if (bikini && !hasBikini && deptOpen && lv >= 3 && Number(g.Emotion) !== 2 && Number(g.Emotion) !== 1 && !(Number(g.DateCoolTime) > nowS - 5)) {
+      const buy = (flag & 15) !== 15 ? (15 & ~flag) : 64;
+      const cost = buy === 64 ? Number(gdef.PresentPrice5) || 0 : [1, 2, 3, 4].filter((k) => buy & [0, 1, 2, 4, 8][k]).reduce((s, k) => s + (Number(gdef['PresentPrice' + k]) || 0), 0);
+      const cashUnit = buy === 64 ? gdef.PresentPriceUnit5 : [1, 2, 3, 4].map((k) => gdef['PresentPriceUnit' + k]).find((u) => u);
+      if (!cashUnit && coin >= cost + 20000) {
+        try { const out = require('child_process').execFileSync('node', [__dirname + '/dates.cjs', String(gid), '0', String(buy)], { encoding: 'utf8', timeout: 120000 });
+          act(`lb department date ${gid} present ${buy} (${cost} coin): ${out.trim().split('\n').pop().slice(0, 200)}`); did = true; } catch (e) { log('lb department date error ' + e.message.slice(0, 200)); }
+        return did; // 한 번에 하나만 (코인 확인 뒤 다음 관리에서 이어서)
+      }
+    }
+    const tryKey = `${OUT}/lb-try.json`; let tr = {}; try { tr = JSON.parse(fs.readFileSync(tryKey, 'utf8')); } catch {}
+    if (hasBikini && Number(g.Emotion) === 3 && lv >= 4 && coin >= Number(set.ExpansionCoin) + 20000 && Date.now() - (tr[gid] ?? 0) > 6 * 3600e3) {
+      tr[gid] = Date.now(); fs.writeFileSync(tryKey, JSON.stringify(tr));
+      const ms = await rpc('MsgGirlRarityExpandReq', { GirlInfo: { Girlid: gid } });
+      const a = ms.find((m) => m.name === 'MsgGirlRarityExpandAns')?.body;
+      act(`lb rarity expand ${gid} (${g.Rarity} -> ${set.TargetRarity}, broken ${broken}): Result ${a?.Result} coin ${coin} -> ${a?.UserInfo?.Coin ?? '?'} crits ${JSON.stringify((set.SGirlExpansionCrit ?? []).map((c) => [c.CritType, c.Param1]))} dates ${g.NthDate}`);
+      return true;
+    }
+  }
+  return did;
+}
+// 데이트로 올려야 하는 한계 돌파 대상: 호감도 4단계 미만, 또는 데이트 횟수 조건(CritType 1)이 남은 캐릭터 (앞의 두 명만, 코인을 한곳에 모은다)
+function lbDateTargets(ud) {
+  const out = [];
+  for (const g of lbTargets(ud).list) {
+    const set = (GIRLT.Girl.find((x) => x.Id === g.Girlid)?.SGirlExpansionCritSet ?? []).find((x) => Number(x.TargetRarity) === Number(g.Rarity) + 1);
+    const nDate = set?.SGirlExpansionCrit?.find((c) => c.CritType === 1)?.Param1 ?? 0;
+    if (famLv(g.Girlid, Number(g.Familiarity) || 0) < 4 || Number(g.NthDate) < nDate || Number(g.Emotion) !== 3) out.push(g.Girlid);
+    if (out.length >= 2) break;
+  }
   return out;
 }
 function unlockDateTargets(ud) {
@@ -657,8 +713,8 @@ function unlockDateTargets(ud) {
     if (n.State !== 5 || !n.GirlInfo?.Girlid) continue;
     const crits = GIRLT.GirlUnlockCrit.filter((c) => c.Girlid === n.GirlInfo.Girlid);
     // 9(주간 리그 컷오프): Parameter1 5 = Master. 이번 시즌 Master 세 라운드를 다 달렸으면 충족으로 본다 (2026-11-09: 45.50+47.30+53.95=146.75 < 컷오프 158.17)
-    const wk9 = (() => { try { const wm = JSON.parse(fs.readFileSync(`${OUT}/wk-master.json`, 'utf8')); return wm.season === Math.floor((Date.now() - Date.parse('2026-11-09T07:54:00Z')) / (7 * 86400e3)) && [1, 2, 3].every((r) => wm.done.includes(r)); } catch { return false; } })();
-    const met = (c) => c.CritType === 1 ? lvOf(c.Parameter1) >= 3 : c.CritType === 2 ? lvOf(c.Parameter1) >= 4 : c.CritType === 8 ? won(c.Parameter1, c.Parameter2) : c.CritType === 4 ? true : c.CritType === 9 && Number(c.Parameter1) === 5 ? (wk9 || null) : null;
+    const wk9 = (() => { try { const wm = JSON.parse(fs.readFileSync(`${OUT}/wk-master.json`, 'utf8')); return wm.season === Math.floor((Date.now() - Date.parse('2026-11-09T07:54:00Z')) / (7 * 86400e3)) ? wm.done : []; } catch { return []; } })();
+    const met = (c) => c.CritType === 1 ? lvOf(c.Parameter1) >= 3 : c.CritType === 2 ? lvOf(c.Parameter1) >= 4 : c.CritType === 8 ? won(c.Parameter1, c.Parameter2) : c.CritType === 4 ? true : c.CritType === 9 && Number(c.Parameter1) === 5 ? ([1, 2, 3].every((r) => wk9.includes(r)) || null) : c.CritType === 9 && Number(c.Parameter1) === 6 ? ([11, 12, 13].every((r) => wk9.includes(r)) || null) : null;
     for (const c of crits) if ((c.CritType === 1 || c.CritType === 2) && !met(c) && mine(c.Parameter1)) out.push(c.Parameter1);
     // 5(X 와 데이트)는 나머지 조건이 모두 충족된 뒤 데이트해야 인정된다. 봇이 판정 못 하는 6·7·9·10(월드 투어·주간 레이스·한계 돌파)이 있으면 데이트하지 않는다
     //   (2026-11-06: 20505 의 9번 주간 레이스 컷오프를 무시해 20303 과 75회 데이트, 회당 코인 2,100~2,400 낭비)
@@ -816,8 +872,8 @@ function farmRace(ud) {
 
 // 한계 돌파 퀘스트(목표 Type 29, 예 10602 -> 6-13 개방): 한계 돌파 안 한 ★2 차량(가장 높은 레벨)을 현재 차량으로 Lv10·숙련도 최대까지 키운 뒤 돌파.
 //   (TOFU 는 이미 1회 돌파 -> 재시도 Result 2, ★4 Lv1·★2 Lv9 도 Result 2: Lv10·숙련도 최대가 조건으로 추정)
-const QUESTS = JSON.parse(fs.readFileSync('/home/user/Github-sibal/offline-server/data/tables/nquests.json', 'utf8')).Quest;
-const TEXT_KR = (() => { try { const t = JSON.parse(fs.readFileSync('/home/user/Github-sibal/offline-server/data/tables/text_kr.json', 'utf8')); return t.Text ?? t; } catch { return {}; } })();
+const QUESTS = JSON.parse(fs.readFileSync(DGP.srv('data/tables/nquests.json'), 'utf8')).Quest;
+const TEXT_KR = (() => { try { const t = JSON.parse(fs.readFileSync(DGP.srv('data/tables/text_kr.json'), 'utf8')); return t.Text ?? t; } catch { return {}; } })();
 function expandQuestActive(ud) {
   for (const q of ud.NquestInfos?.NquestInfo ?? []) {
     if (q.State !== 3) continue;
@@ -932,7 +988,7 @@ async function openGame() {
     if (!tLogin || Date.now() - tLogin < 30000 || i % 5 !== 0) continue;
     try {
       await page.screenshot({ path: `${OUT}/login-step.png`, timeout: 30000 });
-      const p = JSON.parse(require('child_process').execFileSync('python3', ['-I', '-c',
+      const p = JSON.parse(require('child_process').execFileSync(DGP.PY, ['-I', '-c',
         "import sys,json;from PIL import Image;im=Image.open(sys.argv[1]).convert('RGB');print(json.dumps([min(im.getpixel(v)) for v in [(1240,103),(1236,676),(1052,100)]]))",
         `${OUT}/login-step.png`], { encoding: 'utf8' }));
       if (hubSeen) break;
@@ -945,7 +1001,7 @@ async function openGame() {
   for (let i = 0; i < 4; i++) {
     try {
       await page.screenshot({ path: `${OUT}/login-step.png`, timeout: 30000 });
-      const p = JSON.parse(require('child_process').execFileSync('python3', ['-I', '-c',
+      const p = JSON.parse(require('child_process').execFileSync(DGP.PY, ['-I', '-c',
         "import sys,json;from PIL import Image;im=Image.open(sys.argv[1]).convert('RGB');print(json.dumps([min(im.getpixel(v)) for v in [(1240,103),(1236,676),(1052,100)]]))",
         `${OUT}/login-step.png`], { encoding: 'utf8' }));
       if (p[0] > 230) await page.mouse.click(1240, 103); else if (p[1] > 230) await page.mouse.click(1236, 676); else if (p[2] > 230) await page.mouse.click(1052, 100); else break;
@@ -1033,7 +1089,7 @@ async function playRace(t) {
       await page.mouse.click(EVENT_CARD_X[t.card], 450); await sleep(8000); }
     else { await page.mouse.click(175, 450); await sleep(8000);
       // Master 리그(리그 5, 성능 상한 6000) 라운드 (2026-11-09 화면 캡처): 리그 탭 Master(175,580), 기본으로 Round1 이 펼쳐짐 -> Round2(600,607), Round3(600,672)
-      if (t.wkRound) { await page.mouse.click(175, 580); await sleep(3000); if (t.wkRound === 2) await page.mouse.click(600, 607); if (t.wkRound === 3) await page.mouse.click(600, 672); await sleep(2500); await shot('wk-master'); }
+      if (t.wkRound) { await page.mouse.click(175, t.wkRound > 10 ? 665 : 580); await sleep(3000); const rr = t.wkRound % 10; if (rr === 2) await page.mouse.click(600, 607); if (rr === 3) await page.mouse.click(600, 672); await sleep(2500); await shot(t.wkRound > 10 ? 'wk-champ' : 'wk-master'); }
       await page.mouse.click(1040, 665); await sleep(5000); await page.mouse.click(1040, 388); await sleep(2500); await page.mouse.click(818, 502); await sleep(2500); } // 현재 설정 가져오기 확인 창
     await evalJ(DRIVER); await evalJ('window.__botSmart = false; window.__botLead = 0; window.__botLeadEnd = 0; window.__botLeadMap = null');
     tp('map');
@@ -1041,7 +1097,7 @@ async function playRace(t) {
       // 새 챕터 노드: 지도 스크린샷에서 'NEW' 표식을 찾는다 (findnew.py), 못 찾으면 기록된 좌표
       let ep = EVENT_POS_Z[t.zone]?.[t.posId] ?? EVENT_POS[t.posId];
       try { await page.screenshot({ path: `${OUT}/evmap.png`, timeout: 60000 });
-        const o = require('child_process').execFileSync('python3', [__dirname + '/findnew.py', `${OUT}/evmap.png`], { encoding: 'utf8' }).trim();
+        const o = require('child_process').execFileSync(DGP.PY, [__dirname + '/findnew.py', `${OUT}/evmap.png`], { encoding: 'utf8' }).trim();
         if (/^\d+ \d+$/.test(o)) { ep = o.split(' ').map(Number); log(`event node PosId ${t.posId} at ${o}`); } } catch (e) { log('findnew err ' + e); }
       if (!ep) { log(`event node not found PosId ${t.posId}`); return 'nopos'; }
       await page.mouse.click(ep[0], ep[1]); await sleep(4000); }
@@ -1063,10 +1119,10 @@ async function playRace(t) {
   for (let k = 0; k < 3 && !opened; k++) {
     await page.mouse.click(xy[0], xy[1]); await sleep(5000);
     await shot('last-panel');
-    try { opened = require('child_process').execFileSync('python3', ['-I', '-c', "import sys;from PIL import Image;im=Image.open(sys.argv[1]).convert('RGB');print(int(min(im.getpixel((376,95)))>200))", `${OUT}/last-panel.png`], { encoding: 'utf8' }).trim() === '1'; } catch (e) { log('panel check err ' + e); opened = true; }
+    try { opened = require('child_process').execFileSync(DGP.PY, ['-I', '-c', "import sys;from PIL import Image;im=Image.open(sys.argv[1]).convert('RGB');print(int(min(im.getpixel((376,95)))>200))", `${OUT}/last-panel.png`], { encoding: 'utf8' }).trim() === '1'; } catch (e) { log('panel check err ' + e); opened = true; }
     if (!opened) log(`panel not open (try ${k + 1})`);
     // 아직 메인 화면이면 Race 버튼 클릭이 안 먹은 것 (2026-11-06 01:26·01:47: 레벨 18 직후, 노드를 3번 눌러도 허브 그대로) -> Race 부터 다시
-    if (!opened && k < 2) { try { if (require('child_process').execFileSync('python3', ['-I', __dirname + '/ishub.py', `${OUT}/last-panel.png`], { encoding: 'utf8' }).startsWith('1')) {
+    if (!opened && k < 2) { try { if (require('child_process').execFileSync(DGP.PY, ['-I', __dirname + '/ishub.py', `${OUT}/last-panel.png`], { encoding: 'utf8' }).startsWith('1')) {
       log('still on hub: press Race again'); await page.mouse.click(1030, 640); await sleep(15000); await page.mouse.click(350, 612); await sleep(3000); await page.mouse.click(968, 468); await sleep(2000);
       for (let i = 0; i < t.latest - t.zone; i++) { await page.mouse.click(425, 682); await sleep(4500); } } } catch (e) { log('ishub err ' + e); } }
   }
@@ -1258,8 +1314,9 @@ async function finishRace(t, tp, phases) {
     const wkSeason = Math.floor((Date.now() - Date.parse('2026-11-09T07:54:00Z')) / (7 * 86400e3));
     let wm = {}; try { wm = JSON.parse(fs.readFileSync(`${OUT}/wk-master.json`, 'utf8')); } catch {}
     if (wm.season !== wkSeason) wm = { season: wkSeason, done: [] };
-    const wkNext = [1, 2, 3].find((r) => !wm.done.includes(r));
-    if (!questCar && wkNext && (wk[today] ?? 0) < 6 && Number(ud.UserInfo.FightTicket) > 0) { t = { mode: 'weekly', zone: 0, race: null, wkRound: wkNext }; wk[today] = (wk[today] ?? 0) + 1; fs.writeFileSync(wkFile, JSON.stringify(wk)); }
+    // 챔피언 리그(리그 6, 성능 7000 이하) 라운드는 11·12·13 으로 적는다: Kacha(20504) 해금 조건 9 = 리그 6 컷오프 (2026-11-09 추가)
+    const wkNext = [1, 2, 3, 11, 12, 13].find((r) => !wm.done.includes(r));
+    if (!questCar && wkNext && (wk[today] ?? 0) < 9 && Number(ud.UserInfo.FightTicket) > 0) { t = { mode: 'weekly', zone: 0, race: null, wkRound: wkNext }; wk[today] = (wk[today] ?? 0) + 1; fs.writeFileSync(wkFile, JSON.stringify(wk)); }
     if (!questCar && t?.mode !== 'weekly' && (wk[today] ?? 0) < 3 && Number(ud.UserInfo.FightTicket) > 0) { t = { mode: 'weekly', zone: 0, race: null }; wk[today] = (wk[today] ?? 0) + 1; fs.writeFileSync(wkFile, JSON.stringify(wk)); }
     // 실시간 대전: 8시간마다 한 번 빠른 매칭 5분 (상대가 없으면 바로 다음 일). 끄기: run/NODUEL
     { const df = `${OUT}/duel.json`; let dj = {}; try { dj = JSON.parse(fs.readFileSync(df, 'utf8')); } catch {}
@@ -1318,7 +1375,7 @@ async function finishRace(t, tp, phases) {
     t.leadMap = trial?.leadMap ?? null;
     let r;
     try { r = await playRace(t); } catch (e) { log('play err ' + e); r = 'err'; }
-    if (t.wkRound && (r === 'win' || r === 'lose')) { const ss = Math.floor((Date.now() - Date.parse('2026-11-09T07:54:00Z')) / (7 * 86400e3)); let wm = {}; try { wm = JSON.parse(fs.readFileSync(`${OUT}/wk-master.json`, 'utf8')); } catch {} if (wm.season !== ss || !Array.isArray(wm.done)) wm = { season: ss, done: [] }; wm.done = [...new Set([...wm.done, t.wkRound])]; fs.writeFileSync(`${OUT}/wk-master.json`, JSON.stringify(wm)); log(`weekly master round ${t.wkRound} done: ${stats.races[stats.races.length - 1]?.time}`); }
+    if (t.wkRound && (r === 'win' || r === 'lose')) { const ss = Math.floor((Date.now() - Date.parse('2026-11-09T07:54:00Z')) / (7 * 86400e3)); let wm = {}; try { wm = JSON.parse(fs.readFileSync(`${OUT}/wk-master.json`, 'utf8')); } catch {} if (wm.season !== ss || !Array.isArray(wm.done)) wm = { season: ss, done: [] }; wm.done = [...new Set([...wm.done, t.wkRound])]; fs.writeFileSync(`${OUT}/wk-master.json`, JSON.stringify(wm)); log(`weekly ${t.wkRound > 10 ? 'champion' : 'master'} round ${t.wkRound % 10} done: ${stats.races[stats.races.length - 1]?.time}`); }
     if (trial && (r === 'win' || r === 'lose')) { try { setupTrialDone(key, trial, Number(stats.races[stats.races.length - 1]?.time) || 0, r === 'win'); } catch (e) { log('setup trial note err ' + e); } }
     if (r !== 'win' && r !== 'lose') SAFE.progressUndo(); // 끝나지 않은 시도는 진척 감시에서 빼기
     if (r === 'lose' && t.farm && t.race?.RaceId && !weakPassenger(ud)) farmLoss(t.race.RaceId); // 해금용 동승 중 패배는 파밍 회피 기록에 넣지 않는다

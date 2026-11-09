@@ -1,3 +1,4 @@
+const DGP = require('./paths.cjs');
 // 차량 육성 작업 (2026-11-05 사용자 지시: ★2 보호 차량 사용, 코인은 적정선에서 사용, 3·7번 차 적절성 판단)
 //   1) 3·7번(★2 Lv10, 숙련도 한계 돌파 상태)을 조합 -> 무작위 ★3 (퀘스트 10505, 이후 10901 '★3 두 대 조합 -> ★4' 재료)
 //   2) ★3 차량(Lv10 미만, 8번 ★4 제외)을 Lv10 까지: 재료 = ★1·★2 차량. 재료가 없으면 소셜 포인트 차량 상자(72007, 150 SP) ->
@@ -6,7 +7,7 @@
 const fs = require('fs');
 const B = 'http://localhost:8080';
 const LOG = __dirname + '/run/carwork.log';
-const T = '/home/user/Github-sibal/offline-server/data/tables/';
+const T = (DGP.srv('data/tables') + '/');
 const RESERVE = 150000;
 const MAIN = 8; // 주력 ★4 TOFU++
 // --extra-mats=13,14,15 : 재료로 쓸 ★3 (사용자 선택 2026-11-05: ★3 2대(9·10) 육성, 나머지 3대 재료)

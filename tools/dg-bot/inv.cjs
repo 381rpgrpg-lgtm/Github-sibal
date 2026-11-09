@@ -1,3 +1,4 @@
+const DGP = require('./paths.cjs');
 // 보관함 정리 도구 (실서버 RPC, 결과는 run/cleanup.log)
 //   node inv.cjs status                      아이템·부품 빈 칸과 부품 목록
 //   node inv.cjs equip <Itemid> <Carid> <Idx> 부품 장착 (MsgEquipPartsReq)
@@ -6,12 +7,12 @@
 const fs = require('fs');
 const B = 'http://localhost:8080';
 const LOG = __dirname + '/run/cleanup.log';
-const T = '/home/user/Github-sibal/offline-server/data/tables/';
+const T = (DGP.srv('data/tables') + '/');
 const log = (s) => { const l = `[${new Date().toISOString().slice(5, 19)}] ${s}`; console.log(l); fs.appendFileSync(LOG, l + '\n'); };
 const P = JSON.parse(fs.readFileSync(T + 'parts.json', 'utf8')).Part;
 const CARS = JSON.parse(fs.readFileSync(T + 'cars.json', 'utf8')).Car;
 (async () => {
-  const { readTable } = await import('/home/user/Github-sibal/offline-server/dist/upserts.js');
+  const { readTable } = await import(DGP.url('dist/upserts.js'));
   const IT = readTable(T + 'itemTable.json', 'itemTable.json').Item;
   const build = (await (await fetch(B + '/api/version')).json()).build;
   const lr = await (await fetch(B + '/api/login', { method: 'POST', headers: { 'content-type': 'application/json', 'x-dg-build': build }, body: JSON.stringify({ login: 'damissi', password: 'x' }) })).json();

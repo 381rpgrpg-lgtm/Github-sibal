@@ -1,3 +1,4 @@
+import { createRequire as __cr } from 'module'; const DGP = __cr(import.meta.url)('./paths.cjs');
 // 한 차량의 최적 부품 조합 (오프라인 서버 gamecalc.finalAttr 가중 합 기준, 읽기 전용). node partopt.mjs <ud.json> <Carid> [가중치 파일]
 //   가중치 파일(JSON [MaxSpd, Acc, Stability, Drift], 없으면 [1,1,1,1]): 2026-11-07 13-12 에서 합계 +63(가속 위주)은 효과 0,
 //   앞서 최고속 +56 은 -0.09 초 -> 직선 위주 경주는 최고속 비중을 키워 실험한다.
@@ -5,9 +6,9 @@
 //   plan: 칸별로 끼울 부품. 이미 그 차에 있는 부품은 지금 칸에 그대로 두고, 나머지만 빈/교체 칸에 넣는다.
 //   (2026-11-07: 봇이 빈 칸만 채워서 차 10 1번 칸에 ★3 이 남고 ★5 37001 이 창고에 있었다. 교체는 무료 — 실기록 2026-11-02)
 import { readFileSync } from 'node:fs';
-const { finalAttr } = await import('/home/user/Github-sibal/offline-server/dist/gamecalc.js');
+const { finalAttr } = await import(DGP.url('dist/gamecalc.js'));
 const ud = JSON.parse(readFileSync(process.argv[2], 'utf8')); const carId = Number(process.argv[3]);
-const PT = new Map(JSON.parse(readFileSync('/home/user/Github-sibal/offline-server/data/tables/parts.json', 'utf8')).Part.map((p) => [p.Id, p]));
+const PT = new Map(JSON.parse(readFileSync(DGP.srv('data/tables/parts.json'), 'utf8')).Part.map((p) => [p.Id, p]));
 const car = ud.Cars.CarInfo.find((c) => c.Carid === carId);
 if (!car) { console.log(JSON.stringify({ error: 'no car' })); process.exit(0); }
 const slots = Number(car.SlotNum) || 1;

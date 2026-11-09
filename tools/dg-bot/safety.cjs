@@ -1,3 +1,4 @@
+const DGP = require('./paths.cjs');
 // 안전 관문 (2026-11-05). bot.cjs 의 rpc() 가 모든 요청 전후에 부른다 — 어떤 코드 경로든 같은 검사를 받는다.
 //
 // 1) 보호 목록 (run/protect.json): 매 로그인마다 자동으로 다시 계산하고 파일로 남긴다.
@@ -18,7 +19,7 @@
 // 3) 이상 감지: 정상 응답 이름(실기록 기준 EXPECT)이 없으면 ANOMALY (같은 요청 1시간에 한 번 기록).
 //    퀘스트 진척 감시 progressTick(key, value): 같은 목표를 N판 탔는데 값이 그대로면 그 목표는 6시간 쉬게 한다.
 const fs = require('fs');
-const T = '/home/user/Github-sibal/offline-server/data/tables/';
+const T = (DGP.srv('data/tables') + '/');
 const CASH_ITEM_MAX = 10, CASH_DAY_MAX = 30;
 const EXPECT = {
   MsgBuyProductReq: 'MsgBuyProductAns', MsgCarSlotOpenReq: 'MsgCarSlotOpenAns', MsgCollectFamiliarityReq: 'MsgCollectFamiliarityAns',
@@ -43,7 +44,7 @@ const PARTS = new Map(JSON.parse(fs.readFileSync(T + 'parts.json', 'utf8')).Part
 let STORE = null;
 async function store() {
   if (!STORE) {
-    const { readTable } = await import('/home/user/Github-sibal/offline-server/dist/upserts.js');
+    const { readTable } = await import(DGP.url('dist/upserts.js'));
     STORE = new Map(readTable(T + 'itemTable.json', 'itemTable.json').StoreItem.map((s) => [s.Id, s]));
   }
   return STORE;

@@ -1,10 +1,11 @@
+const DGP = require('./paths.cjs');
 // 퀘스트 목표 형식 전수 점검: nquests.json 의 목표 Type 별 파라미터 형태(빈 칸 위치)를 모두 뽑고,
 // 봇(bot.cjs 'Number(o.Type) === N')과 오프라인 서버(quests.ts stateValue 'case N:', questEvent(snap, N ...))가 그 Type 을 다루는지 대조한다.
 // 형태가 2가지 이상인 Type 은 '형식 주의'로 표시 (2026-11-05: Type 2 [횟수, 구역, 레이스, '', 캐릭터] 와 [횟수, 구역, '', 등급, 캐릭터],
 //   Type 7 [1, 캐릭터, 등급] / [1, 캐릭터, '', 단계] / [1, 캐릭터, 1, 1, 단계] 를 한 가지로 처리해 생긴 문제).
 // node audit-quests.cjs [--all]   결과: run/quest-audit.txt (진행 중·대기 퀘스트에 나오는 Type 은 '*' 표시)
 const fs = require('fs');
-const D = '/home/user/Github-sibal/offline-server/';
+const D = DGP.srv('');
 const Q = JSON.parse(fs.readFileSync(D + 'data/tables/nquests.json', 'utf8')).Quest;
 const K = (() => { const t = JSON.parse(fs.readFileSync(D + 'data/tables/text_kr.json', 'utf8')); return t.Text ?? t; })();
 const bot = fs.readFileSync(__dirname + '/bot.cjs', 'utf8');

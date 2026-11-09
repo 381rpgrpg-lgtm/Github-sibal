@@ -1,3 +1,4 @@
+const DGP = require('./paths.cjs');
 // safety.cjs 단위 시험 (네트워크 없음). run/ud.json 을 바탕으로 가상 상황을 만들어 관문 판정을 확인한다.
 const fs = require('fs');
 const os = require('path');
@@ -60,8 +61,8 @@ const login = (ud) => S.onResponse('MsgLoginReq', {}, [{ name: 'MsgUserData', bo
   expect('coin car box 73008 allowed', (await S.beforeSend('MsgBuyProductReq', { StoreItemId: 73008, Buycount: 1 })).ok);
   expect('social car box 72007 allowed', (await S.beforeSend('MsgBuyProductReq', { StoreItemId: 72007, Buycount: 1 })).ok);
   expect('free box 71026 allowed', (await S.beforeSend('MsgBuyProductReq', { StoreItemId: 71026, Buycount: 1 })).ok);
-  const { readTable } = await import('/home/user/Github-sibal/offline-server/dist/upserts.js');
-  const st = readTable('/home/user/Github-sibal/offline-server/data/tables/itemTable.json', 'itemTable.json').StoreItem;
+  const { readTable } = await import(DGP.url('dist/upserts.js'));
+  const st = readTable(DGP.srv('data/tables/itemTable.json'), 'itemTable.json').StoreItem;
   const gold = st.find((s) => s.PriceGoldCash !== undefined), real = st.find((s) => s.PriceRealMoney !== undefined);
   const cashBig = st.find((s) => s.PriceCash !== undefined && s.PriceCoin === undefined && Number(s.SalePrice ?? s.PriceCash) > 10 && s.PriceRealMoney === undefined && s.PriceGoldCash === undefined);
   const cashSmall = st.find((s) => s.PriceCash !== undefined && s.PriceCoin === undefined && Number(s.SalePrice ?? s.PriceCash) <= 10 && Number(s.SalePrice ?? s.PriceCash) > 0 && s.PriceRealMoney === undefined && s.PriceGoldCash === undefined);
