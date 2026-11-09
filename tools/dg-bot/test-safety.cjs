@@ -7,6 +7,10 @@ const S = require('./safety.cjs');
 const logs = [];
 S.init(OUT, (s) => logs.push(s));
 const base = JSON.parse(fs.readFileSync(__dirname + '/run/ud.json', 'utf8'));
+// 고정 상황 (2026-11-08: run/ud.json 이 바뀌어도 시험 전제가 같게): 현재 차량 8 (★4), 9 ★3 Lv10, 10 번 이상 차량 없음, 부품 106 은 미장착
+base.UserInfo.Currentcar = 8;
+base.Cars.CarInfo = base.Cars.CarInfo.filter((c) => c.Carid < 10);
+for (const it of base.Items.ItemInfo) if (it.Equipcarid >= 10) { it.Equipcarid = 0; it.Equipindex = 0; }
 let pass = 0, fail = 0;
 const expect = (label, cond) => { if (cond) pass++; else fail++; console.log(`${cond ? 'PASS' : 'FAIL'} ${label}`); };
 const login = (ud) => S.onResponse('MsgLoginReq', {}, [{ name: 'MsgUserData', body: ud }]);
@@ -16,7 +20,9 @@ const login = (ud) => S.onResponse('MsgLoginReq', {}, [{ name: 'MsgUserData', bo
   const pr = S.protect;
   console.log('protect cars', JSON.stringify(pr.cars), 'parts', pr.parts.length);
   expect('current ★4 car 8 protected', !(await S.beforeSend('MsgDisassembleCarReq', { CarID: [8] })).ok);
-  expect('★3 Lv10 car 9 protected as material', !(await S.beforeSend('MsgUpgradeCarReq', { TargetCarInfo: { Carid: 8 }, SourceCarInfo: [{ Carid: 9 }] })).ok);
+  // 2026-11-08 규칙: ★3 은 강화 재료로만 허용, 분해·판매는 막는다
+  expect('★3 Lv10 car 9 allowed as material', (await S.beforeSend('MsgUpgradeCarReq', { TargetCarInfo: { Carid: 8 }, SourceCarInfo: [{ Carid: 9 }] })).ok);
+  expect('★3 Lv10 car 9 blocked from disassembly', !(await S.beforeSend('MsgDisassembleCarReq', { CarID: [9] })).ok);
   expect('unknown car id 77 blocked', !(await S.beforeSend('MsgUpgradeCarReq', { TargetCarInfo: { Carid: 8 }, SourceCarInfo: [{ Carid: 77 }] })).ok);
 
   // 가상: ★3 Lv1 세 대 추가 (10·13·14) + ★1 1대(15). 9 Lv10 과 10 이 육성 대상 -> 13·14 는 남는 ★3 Lv1 (재료 허용), 15 허용
@@ -24,7 +30,8 @@ const login = (ud) => S.onResponse('MsgLoginReq', {}, [{ name: 'MsgUserData', bo
   const mk = (Carid, Cartype, Grade) => ({ Carid, Cartype, Grade, UpgradeLevel: 1, CarExp: 0, Mastery: 0, ExpansionLevel: 0, ItemInfo: [] });
   ud2.Cars.CarInfo.push(mk(10, 10403, 3), mk(13, 10503, 3), mk(14, 10303, 3), mk(15, 10101, 1));
   login(ud2);
-  expect('grow ★3 car 10 (lowest id Lv1) protected', !(await S.beforeSend('MsgUpgradeCarReq', { TargetCarInfo: { Carid: 9 }, SourceCarInfo: [{ Carid: 10 }] })).ok);
+  expect('★3 Lv1 car 10 allowed as material', (await S.beforeSend('MsgUpgradeCarReq', { TargetCarInfo: { Carid: 9 }, SourceCarInfo: [{ Carid: 10 }] })).ok);
+  expect('★3 Lv1 car 13 blocked from disassembly', !(await S.beforeSend('MsgDisassembleCarReq', { CarID: [13] })).ok);
   expect('spare ★3 Lv1 car 13 allowed as material', (await S.beforeSend('MsgUpgradeCarReq', { TargetCarInfo: { Carid: 10 }, SourceCarInfo: [{ Carid: 13 }, { Carid: 14 }] })).ok);
   expect('★1 car 15 allowed', (await S.beforeSend('MsgUpgradeCarReq', { TargetCarInfo: { Carid: 10 }, SourceCarInfo: [{ Carid: 15 }] })).ok);
   expect('combine 9+10 blocked without allowCombine', !(await S.beforeSend('MsgCombineCarReq', { TargetCarID: 9, SourceCarID: 10 })).ok);
@@ -42,7 +49,7 @@ const login = (ud) => S.onResponse('MsgLoginReq', {}, [{ name: 'MsgUserData', bo
 
   // 부품
   login(base);
-  const parts = base.Items.ItemInfo.filter((x) => x.Equipcarid === 8);
+  const parts = base.Items.ItemInfo.filter((x) => x.Equipcarid > 0 && x.Equipcarid === base.UserInfo.Currentcar);
   expect('part on current car blocked from sale', !(await S.beforeSend('MsgSellPartsReq', { Itemid: [parts[0].Itemid] })).ok);
   expect('★4 part 101 blocked as combine material', !(await S.beforeSend('MsgCombinePartsReq', { Itemid: 106, ConsumeParts: [101] })).ok);
   expect('spare ★3 part 106 sale allowed', (await S.beforeSend('MsgSellPartsReq', { Itemid: [106] })).ok);

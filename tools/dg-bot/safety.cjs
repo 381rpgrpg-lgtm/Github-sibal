@@ -3,8 +3,10 @@
 // 1) 보호 목록 (run/protect.json): 매 로그인마다 자동으로 다시 계산하고 파일로 남긴다.
 //    - 서버는 차량·부품 번호를 재사용한다 (2026-11-05: Carid 13 이 다섯 번 다른 차종으로, 부품 142·143 재사용)
 //      -> 항목은 번호 + 종류(Cartype/Itemtype) 쌍으로 대조한다. 같은 번호에 다른 종류면 다른 물건이다.
-//    - 자동 보호 차량: 현재 차량, ★4 이상, ★3 육성 대상 2대(레벨·경험치 순), 손댄 ★3(Lv2 이상·숙련도·한계 돌파),
-//      ★3 이 2대 이하일 때는 모든 ★3, 잠금·전시 차량. 남는 ★3 Lv1(육성 대상 2대가 이미 있을 때)만 재료 허용.
+//    - 자동 보호 차량: 현재 차량, ★4 이상, ★3, 잠금·전시 차량.
+//      2026-11-08 (사용자 위임 "네가 판단하고 금지조건 수정해"): ★3 은 강화 재료(MsgUpgradeCarReq)로만 허용한다 (mat: true).
+//      주력 ★5 를 키우는 게 ★3 조합 퀘스트 10901(보상 경험치 200·코인 3000)보다 본편 진행에 낫다고 판단. 분해·판매·조합은 계속 막는다.
+//      (예전 규칙: ★3 육성 대상 2대·손댄 ★3·★3 2대 이하 보호, 남는 ★3 Lv1 만 재료)
 //    - 자동 보호 부품: 현재 차량에 장착된 부품, ★4 이상, 잠금.
 //    - 수동 보호 (protect.json 의 manual.cars [{Carid, Cartype}] / manual.parts [{Itemid, Itemtype}]): 항상 보호.
 //      그 번호의 물건이 사라지거나 종류가 바뀌면(재사용) 수동 항목은 자동으로 지운다(로그).
@@ -70,10 +72,9 @@ function computeProtect(ud) {
   const grow3 = new Set(g3.slice(0, 2).map((c) => c.Carid));
   const pc = [];
   for (const c of cars) {
-    const why = c.Carid === cur ? 'current' : carGrade(c) >= 4 ? '★4+' : grow3.has(c.Carid) ? '★3 grow' : g3.length <= 2 && carGrade(c) === 3 ? '★3 (≤2)'
-      : carGrade(c) === 3 && (c.UpgradeLevel > 1 || Number(c.Mastery) > 0 || Number(c.ExpansionLevel) > 0) ? '★3 invested'
-      : c.IsLocked ? 'locked' : c.IsExhibited ? 'exhibited' : keepCar.some((m) => Number(m.Carid) === c.Carid) ? 'manual' : null;
-    if (why) pc.push({ Carid: c.Carid, Cartype: c.Cartype, why });
+    const why = c.Carid === cur ? 'current' : carGrade(c) >= 4 ? '★4+' : c.IsLocked ? 'locked' : c.IsExhibited ? 'exhibited'
+      : keepCar.some((m) => Number(m.Carid) === c.Carid) ? 'manual' : carGrade(c) === 3 ? '★3' : null;
+    if (why) pc.push({ Carid: c.Carid, Cartype: c.Cartype, why, ...(why === '★3' ? { mat: true } : {}) });
   }
   const pp = [];
   for (const it of items) {
@@ -103,7 +104,7 @@ async function beforeSend(name, body) {
   const block = (reason) => { alert(`GUARD ${name} blocked: ${reason}`); return { ok: false, reason }; };
   const cars = (ids) => ids.map(Number).filter(Boolean);
   if (name === 'MsgUpgradeCarReq') {
-    for (const id of cars((body?.SourceCarInfo ?? []).map((c) => c.Carid))) { const p = carProtected(id); if (p) return block(`material car ${id} (${p.Cartype}) protected: ${p.why}`); }
+    for (const id of cars((body?.SourceCarInfo ?? []).map((c) => c.Carid))) { const p = carProtected(id); if (p && !p.mat) return block(`material car ${id} (${p.Cartype}) protected: ${p.why}`); }
   }
   if (name === 'MsgDisassembleCarReq' || name === 'MsgSellCarReq') {
     const ids = cars([].concat(body?.CarID ?? body?.CarInfo?.Carid ?? body?.Carid ?? []));
