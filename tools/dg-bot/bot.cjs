@@ -293,7 +293,8 @@ async function manage() {
             const flag = Number(g.ItemFlag) || 0;
             const deptOpen = (Number(ud.UserInfo.Completion) & 536870912) !== 0 || famLv(Number(ud.UserInfo.FirstGirl), Number((ud.MyGirls?.MyGirlInfo ?? []).find((x) => x.Girlid === Number(ud.UserInfo.FirstGirl))?.Familiarity) || 0) >= 3;
             const nowS = Date.now() / 1000;
-            if (bikini && !hasBikini && deptOpen && famLv(gid, Number(g.Familiarity) || 0) >= 3 && Number(g.Emotion) !== 2 && !(Number(g.DateCoolTime) > nowS - 5)) {
+            // 싼 ★1 한계 돌파 대상(lbDrive, 약 2만 코인/명)이 남아 있으면 이 퀘스트 경로의 백화점 구매는 미룬다 (2026-11-09: 20301 ★2->★3 은 확장 코인 41,100)
+            if (bikini && !hasBikini && deptOpen && !lbTargets(ud).list.length && famLv(gid, Number(g.Familiarity) || 0) >= 3 && Number(g.Emotion) !== 2 && !(Number(g.DateCoolTime) > nowS - 5)) {
               const buy = (flag & 15) !== 15 ? (15 & ~flag) : 64;
               const cost = buy === 64 ? Number(gdef.PresentPrice5) || 0 : [1, 2, 3, 4].filter((k) => buy & [0, 1, 2, 4, 8][k]).reduce((s, k) => s + (Number(gdef['PresentPrice' + k]) || 0), 0);
               const cashUnit = buy === 64 ? gdef.PresentPriceUnit5 : [1, 2, 3, 4].map((k) => gdef['PresentPriceUnit' + k]).find((u) => u);
