@@ -683,6 +683,7 @@ async function lbDrive(ud) {
           act(`lb department date ${gid} present ${buy} (${cost} coin): ${out.trim().split('\n').pop().slice(0, 200)}`); did = true; } catch (e) { log('lb department date error ' + e.message.slice(0, 200)); }
         return did; // 한 번에 하나만 (코인 확인 뒤 다음 관리에서 이어서)
       }
+      if (!cashUnit) return did; // 코인이 모자라면 다음 대상으로 넘어가지 않고 모은다 (한 명씩 끝낸다, 2026-11-09)
     }
     const tryKey = `${OUT}/lb-try.json`; let tr = {}; try { tr = JSON.parse(fs.readFileSync(tryKey, 'utf8')); } catch {}
     if (hasBikini && Number(g.Emotion) === 3 && lv >= 4 && coin >= Number(set.ExpansionCoin) + 20000 && Date.now() - (tr[gid] ?? 0) > 6 * 3600e3) {
@@ -692,6 +693,7 @@ async function lbDrive(ud) {
       act(`lb rarity expand ${gid} (${g.Rarity} -> ${set.TargetRarity}, broken ${broken}): Result ${a?.Result} coin ${coin} -> ${a?.UserInfo?.Coin ?? '?'} crits ${JSON.stringify((set.SGirlExpansionCrit ?? []).map((c) => [c.CritType, c.Param1]))} dates ${g.NthDate}`);
       return true;
     }
+    if (hasBikini && Number(g.Emotion) === 3 && lv >= 4 && Date.now() - (tr[gid] ?? 0) > 6 * 3600e3) return did; // 확장 코인을 모으는 중
   }
   return did;
 }
