@@ -44,6 +44,13 @@ export async function dispatch(name: string, body: any, ctx: Ctx): Promise<{ mes
       console.log(`[rpc] ${name} -> (upstream, 강제 기록) ${messages.map((m) => m.name).join(',') || '(none)'}`);
       return { messages };
     } catch (e) {
+      // 전체 중계('*')에서는 로컬로 넘기지 않는다: 로컬 DB 는 실계정과 다른 오래된 상태라, 로컬 응답을 실계정 응답으로 오인한다
+      //   (2026-11-09 16:02 실서버 DNS 일시 실패 -> 로컬 로그인 응답의 캐시 270 을 받은 봇이 캐시 603 지출로 오판, 기록 전체 5건 중 1건은 MsgBattleResultReq 502).
+      //   실패를 그대로 돌려주고, 다시 보낼지는 호출하는 쪽이 정한다(조회 요청만 다시 보내기).
+      if (RECORD_ALWAYS.has('*')) {
+        console.warn(`[rpc] ${name} upstream 실패, 오류로 돌려줌: ${(e as Error).message}`);
+        return { error: `upstream_failed:${name}: ${(e as Error).message}` };
+      }
       console.warn(`[rpc] ${name} upstream 실패, 로컬 처리로 전환: ${(e as Error).message}`);
     }
   }

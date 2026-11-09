@@ -59,6 +59,7 @@ async function api() {
 // 모든 요청은 안전 관문(safety.cjs)을 지난다: 보호 목록·Gold Cash·캐시 상한 검사(보내기 전), 캐시 지출·정상 응답 확인(받은 뒤)
 const SAFE = require('./safety.cjs');
 SAFE.init(OUT, log);
+const RPC_READONLY = new Set(['MsgLoginReq', 'MsgGetUserDataReq']);
 async function rpc(name, body = {}) {
   const chk = await SAFE.beforeSend(name, body);
   if (!chk.ok) return [];
@@ -69,7 +70,13 @@ async function rpc(name, body = {}) {
     catch (e) { const c = String(e?.cause?.code || e?.cause?.message || e?.message || ''); if (k === 0 && /UND_ERR_SOCKET|ECONNRESET|other side closed|EPIPE|socket hang up/i.test(c)) { log(`rpc ${name} retry after ${c}`); await sleep(300); continue; } log(`rpc ${name} failed: ${c}`); throw e; } } };
   let r = await post();
   if (r.status === 401) { await api(); r = await post(); }
-  const j = await r.json();
+  let j = await r.json();
+  // 실서버 실패(중계가 {error:'upstream_failed:...'} 로 돌려줌, 2026-11-09): 조회 요청만 10·20·40초 뒤 다시 보낸다.
+  //   쓰기 요청은 실서버에 닿았는지 알 수 없어 다시 보내지 않고 예외로 끝낸다 (manage() 의 catch 가 1분 쉬고 다음 순환).
+  for (let k = 0; String(j?.error ?? '').startsWith('upstream_failed') && RPC_READONLY.has(name) && k < 3; k++) {
+    log(`rpc ${name} ${j.error} -> retry in ${10 << k}s`); await sleep(10e3 * (1 << k)); r = await post(); j = await r.json();
+  }
+  if (String(j?.error ?? '').startsWith('upstream_failed')) { log(`rpc ${name} ${j.error}`); throw new Error(j.error); }
   const msgs = j.messages || [];
   SAFE.onResponse(name, body, msgs);
   return msgs;
