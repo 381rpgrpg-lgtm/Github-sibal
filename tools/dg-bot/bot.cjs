@@ -291,7 +291,7 @@ async function manage() {
             const hasBikini = (ud.GirlItems?.GirlItemInfo ?? []).some((x) => x.ItemType === bikini);
             const gdef = GIRLT.Girl.find((x) => x.Id === gid) ?? {};
             const flag = Number(g.ItemFlag) || 0;
-            const deptOpen = famLv(Number(ud.UserInfo.FirstGirl), Number((ud.MyGirls?.MyGirlInfo ?? []).find((x) => x.Girlid === Number(ud.UserInfo.FirstGirl))?.Familiarity) || 0) >= 3;
+            const deptOpen = (Number(ud.UserInfo.Completion) & 536870912) !== 0 || famLv(Number(ud.UserInfo.FirstGirl), Number((ud.MyGirls?.MyGirlInfo ?? []).find((x) => x.Girlid === Number(ud.UserInfo.FirstGirl))?.Familiarity) || 0) >= 3;
             const nowS = Date.now() / 1000;
             if (bikini && !hasBikini && deptOpen && famLv(gid, Number(g.Familiarity) || 0) >= 3 && Number(g.Emotion) !== 2 && !(Number(g.DateCoolTime) > nowS - 5)) {
               const buy = (flag & 15) !== 15 ? (15 & ~flag) : 64;
@@ -654,6 +654,8 @@ function fondSkip(ud) {
 //   (Anna 20106 쪽 20502 는 9명). 지금 1명(20404). ★1 -> ★2 는 확장 코인 8,200 + 백화점 액세서리 4개·수영복 약 12,000 코인으로 가장 싸다.
 //   대상: run/lb-targets.json [캐릭터...] (없으면 아래 기본 6명). 공통 조건(클라이언트 GirlExpansionPopup): 호감도 4단계, 기분 3, 첫 수영복 보유.
 //   개별 조건 중 봇이 판정 못 하는 것(14 승리 수, 16 레이스 수 등)은 서버 판정에 맡기고, 거절되면 그 캐릭터는 6시간에 한 번만 다시 시도한다.
+//   백화점 열림 = UserInfo.Completion 의 DepartmentStore 비트(536870912, 첫 백화점 튜토리얼에서 켜짐). 첫 히로인 호감도 3단계로만 보던 예전 판정은
+//   2026-11-09 11:20 첫 히로인 20105 를 한계 돌파해 호감도가 0 이 되자 '닫힘'으로 바뀌어 남은 대상의 수영복 구매가 8시간 멈췄다.
 const LB_DEFAULT = [20105, 20102, 20302, 20207, 20405, 20101];
 function lbTargets(ud) {
   let list = LB_DEFAULT; try { list = JSON.parse(fs.readFileSync(`${OUT}/lb-targets.json`, 'utf8')); } catch {}
@@ -664,7 +666,7 @@ function lbTargets(ud) {
 async function lbDrive(ud) {
   const { broken, list } = lbTargets(ud); if (!list.length) return false;
   const nowS = Date.now() / 1000; let did = false;
-  const deptOpen = famLv(Number(ud.UserInfo.FirstGirl), Number((ud.MyGirls?.MyGirlInfo ?? []).find((x) => x.Girlid === Number(ud.UserInfo.FirstGirl))?.Familiarity) || 0) >= 3;
+  const deptOpen = (Number(ud.UserInfo.Completion) & 536870912) !== 0 || famLv(Number(ud.UserInfo.FirstGirl), Number((ud.MyGirls?.MyGirlInfo ?? []).find((x) => x.Girlid === Number(ud.UserInfo.FirstGirl))?.Familiarity) || 0) >= 3;
   for (const g of list) {
     const gid = g.Girlid, gdef = GIRLT.Girl.find((x) => x.Id === gid) ?? {}, lv = famLv(gid, Number(g.Familiarity) || 0);
     const set = (gdef.SGirlExpansionCritSet ?? []).find((x) => Number(x.TargetRarity) === Number(g.Rarity) + 1); if (!set) continue;
