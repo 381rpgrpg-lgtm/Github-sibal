@@ -22,7 +22,7 @@
 //   - 종료 대본: 좋아함>싫어함 Good, 같으면 Basic, 적으면 Bad. 채팅 이벤트는 조건(ChatConditionA..C) 충족 중 무작위(튜토리얼은 A)
 //   - 백화점(DateType 3) 데이트는 아래 departmentStart/departmentProgress.
 import { readFileSync, existsSync } from 'node:fs';
-import { markPeevish } from '../peevish.js';
+import { markPeevish, RIVAL_RIDE } from '../peevish.js';
 import { register, type Msg, type Ctx } from '../rpc.js';
 import { bumpProperty, levelUp } from './battle.js';
 import { ensureGirl, expansionReady } from './girls.js';
@@ -487,7 +487,9 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
     //   추정: 싫어함 1개로 만족도 2 가 된 경우도 화남, 화남에서 4 -> 보통
     {
       const e = Number(g.Emotion) || 0;
-      if (st.peevish) { g.Emotion = 0; g.CauseOfPeevish = 0; g.SolutionForPeevish = 0; }
+      // 원인 12(라이벌 동승)는 데이트로 안 풀린다 (실기록 2026-11-10 20505 데이트 3회, 기분 1 유지) -> 동승 레이스로 (peevish.ts ridePeevish)
+      if (st.peevish && Number(g.CauseOfPeevish) !== RIVAL_RIDE) { g.Emotion = 0; g.CauseOfPeevish = 0; g.SolutionForPeevish = 0; }
+      else if (st.peevish) { /* 기분 1 유지 */ }
       else if (e !== 1 && sat > 0) {
         if (sat <= 2 && st.dislikes > 0) g.Emotion = 2;
         else if (e === 2) g.Emotion = sat >= 3 ? 0 : 2;

@@ -25,3 +25,42 @@ export function peevishDecay(snap: any, nowSec = Date.now() / 1000): any[] {
   }
   return out;
 }
+
+// ── 삐침 조건 12 '라이벌 동승' (girlTable PeevishCondition 12, 값 = 횟수, RivalGirl) ─────────────
+// 실기록 2026-11-10 (20505, 조건 12 값 15, RivalGirl 20504):
+//   20504 를 동승자로 둔 본편 레이스 15회째(17:17 동승 변경 ~ 19:46) 결과에서 20505 가 기분 1·CauseOfPeevish 12·SolutionForPeevish 12.
+//   그 뒤 20505 와 데이트 3회(Date_Peevish 대본, 만족도 3~4)로는 안 풀렸고(기분 1 유지), 20505 를 동승자로 바꾼 첫 레이스 결과
+//   MsgBattleResultAns.UpdateGirlInfo 에 20505 기분 0·원인 0, 친밀도 +10 으로 풀렸다.
+//   센 값은 snap.peevishCount[캐릭터][12]. 그 캐릭터가 동승하거나 데이트하면 0 (추정: 기록상 둘 다 17:06~17:17 에 있었다).
+export const RIVAL_RIDE = 12;
+/** a race finished with `passengerId` riding: resolve that girl's rival-ride sulk, count the rival rides of the others.
+ *  returns the girls whose record changed (for UpdateGirlInfo) */
+export function ridePeevish(snap: any, passengerId: number, gdef: (id: number) => any, nowSec = Date.now() / 1000): any[] {
+  const cnt: Record<string, Record<string, number>> = (snap.peevishCount ??= {});
+  const out: any[] = [];
+  for (const y of snap.MyGirls?.MyGirlInfo ?? []) {
+    const id = Number(y.Girlid);
+    if (Number(y.State) !== 7) continue;
+    if (id === passengerId) {
+      if (cnt[id]) cnt[id][RIVAL_RIDE] = 0;
+      if (Number(y.Emotion) === 1 && Number(y.CauseOfPeevish) === RIVAL_RIDE) {
+        y.Emotion = 0; y.CauseOfPeevish = 0; y.SolutionForPeevish = 0;
+        delete snap.peevishSince?.[id]; delete snap.peevishApplied?.[id];
+        out.push(y);
+      }
+      continue;
+    }
+    const def = gdef(id); if (!def || Number(def.RivalGirl) !== passengerId) continue;
+    for (const n of [1, 2, 3]) {
+      if (Number(def[`PeevishCondition${n}`]) !== RIVAL_RIDE) continue;
+      const val = Number(def[`PeevishValue${n}`]) || 0; if (!val) continue;
+      const c = (cnt[id] ??= {});
+      c[RIVAL_RIDE] = (c[RIVAL_RIDE] ?? 0) + 1;
+      if (c[RIVAL_RIDE] >= val && Number(y.Emotion) !== 1) {
+        y.Emotion = 1; y.CauseOfPeevish = RIVAL_RIDE; y.SolutionForPeevish = RIVAL_RIDE; markPeevish(snap, id, nowSec);
+        c[RIVAL_RIDE] = 0; out.push(y);
+      }
+    }
+  }
+  return out;
+}
