@@ -388,15 +388,20 @@ async function manage() {
     const dqd = (ud.PropertySet?.Property ?? []).find((p) => p.PropertyName === 'DQUEST_DATE');
     const dqAll = (ud.PropertySet?.Property ?? []).find((p) => p.PropertyName === 'DQUEST');
     if (dqAll?.Nvalue === 1 && (dqd?.Nvalue ?? 0) < 3 && ud.UserInfo.Coin > 2000) {
-      const open = (id) => (ud.MyGirls?.MyGirlInfo ?? []).find((g) => g.Girlid === id && g.State === 7);
-      const girls = [20302, 20405, 20101, 20102].filter(open);
+      // 쿨타임 중인 캐릭터는 건너뛰고 회마다 다시 고른다 (2026-11-10: 한계 돌파한 20302 는 쿨타임이 30초 -> 20분이 되어
+      //   35초 간격 3회가 propose fail Result 2 로 여러 번 실패). 한계 돌파를 기다리는 캐릭터는 기분 3이 조건이라 맨 뒤로
+      //   (같은 날 20302 대학 만족도 1 -> 기분 3 -> 2). 싫어하는 장소(DislikePlace, 20101 = 대학 42071)도 피한다.
+      const open = (id) => (ud.MyGirls?.MyGirlInfo ?? []).find((g) => g.Girlid === id && g.State === 7 && !(Number(g.DateCoolTime) > Date.now() / 1000));
+      const lbIds = new Set(lbTargets(ud).list.map((g) => g.Girlid));
+      const order = [20302, 20102, 20105, 20404, 20207, 20405, 20101].sort((a, b) => (lbIds.has(a) ? 1 : 0) - (lbIds.has(b) ? 1 : 0));
       const places = [41011, 42071, 41022];
       for (let n = dqd?.Nvalue ?? 0, i = 0; n < 3 && i < 6; i++) {
-        const g = open(girls[0]); const last = Number(g?.LastDatePlace) || 0;
-        const place = places.find((p) => p !== last) ?? 41011;
-        const out = require('child_process').execFileSync('node', [__dirname + '/dates.cjs', String(girls[0]), String(place)], { encoding: 'utf8', timeout: 120000 });
-        const line = out.trim().split('\n').pop(); act(`date ${girls[0]}@${place}: ${line.slice(0, 200)}`);
-        markDateFail(girls[0], place, line); if (/"refused":"/.test(line)) break;
+        const gid = order.find(open); if (!gid) break;
+        const g = open(gid), last = Number(g?.LastDatePlace) || 0, dis = Number(GIRLT.Girl.find((x) => x.Id === gid)?.DislikePlace) || 0;
+        const place = places.find((p) => p !== last && p !== dis) ?? 41011;
+        const out = require('child_process').execFileSync('node', [__dirname + '/dates.cjs', String(gid), String(place)], { encoding: 'utf8', timeout: 120000 });
+        const line = out.trim().split('\n').pop(); act(`date ${gid}@${place}: ${line.slice(0, 200)}`);
+        markDateFail(gid, place, line); if (/"refused":"/.test(line)) break;
         if (/DQUEST_DATE=(\d)/.test(line)) n = Number(RegExp.$1); else break;
         await sleep(35000);
         ud = pick(await rpc('MsgLoginReq'), 'MsgUserData');
