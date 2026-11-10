@@ -727,7 +727,11 @@ function unlockDateTargets(ud) {
     // 9(주간 리그 컷오프): Parameter1 5 = Master. 이번 시즌 Master 세 라운드를 다 달렸으면 충족으로 본다 (2026-11-09: 45.50+47.30+53.95=146.75 < 컷오프 158.17)
     const wk9 = (() => { try { const wm = JSON.parse(fs.readFileSync(`${OUT}/wk-master.json`, 'utf8')); return wm.season === Math.floor((Date.now() - Date.parse('2026-11-09T07:54:00Z')) / (7 * 86400e3)) ? wm.done : []; } catch { return []; } })();
     const met = (c) => c.CritType === 1 ? lvOf(c.Parameter1) >= 3 : c.CritType === 2 ? lvOf(c.Parameter1) >= 4 : c.CritType === 8 ? won(c.Parameter1, c.Parameter2) : c.CritType === 4 ? true : c.CritType === 9 && Number(c.Parameter1) === 5 ? ([1, 2, 3].every((r) => wk9.includes(r)) || null) : c.CritType === 9 && Number(c.Parameter1) === 6 ? ([11, 12, 13].every((r) => wk9.includes(r)) || null) : null;
-    for (const c of crits) if ((c.CritType === 1 || c.CritType === 2) && !met(c) && mine(c.Parameter1)) out.push(c.Parameter1);
+    // 같은 노드의 다른 호감도 조건이 아직 해금 안 된 캐릭터면, 그 캐릭터가 열릴 때까지 나머지 호감도 데이트를 미룬다
+    //   (2026-11-09~10: 20504 해금 = 20302·20505·20202·20103 호감도 4. 20103 은 한계 돌파 7명 뒤에야 열리는데, 한계 돌파로 0이 된 20302 와
+    //    14회 데이트하며 코인 26,000 소모 -> 한계 돌파용 코인이 2만 5천 근처에서 멈춤)
+    const lockedPeer = crits.some((c) => (c.CritType === 1 || c.CritType === 2) && !mine(c.Parameter1));
+    if (!lockedPeer) for (const c of crits) if ((c.CritType === 1 || c.CritType === 2) && !met(c) && mine(c.Parameter1)) out.push(c.Parameter1);
     // 5(X 와 데이트)는 나머지 조건이 모두 충족된 뒤 데이트해야 인정된다. 봇이 판정 못 하는 6·7·9·10(월드 투어·주간 레이스·한계 돌파)이 있으면 데이트하지 않는다
     //   (2026-11-06: 20505 의 9번 주간 레이스 컷오프를 무시해 20303 과 75회 데이트, 회당 코인 2,100~2,400 낭비)
     if (crits.filter((c) => c.CritType !== 5).every((c) => met(c) === true)) for (const c of crits) if (c.CritType === 5 && mine(c.Parameter1)) out.push(c.Parameter1);
