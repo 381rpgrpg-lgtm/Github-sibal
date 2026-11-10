@@ -37,8 +37,16 @@ import { girlDef as gdef, table, syncGirl } from '../gamecalc.js';
 // 쿨타임: girlTable DateCoolTime(분, 20105 = 0.5 -> 30초). 쿨타임 중에는 클라이언트가 캐시 초기화 화면만 띄우고
 //   신청을 보내지 않는다 (사용자 확인 2026-11-02). 캐시 초기화 요청은 캐시 소비라 기록하지 않았다 -> 미구현.
 const COOLTIME_SEC = 30;
-/** 캐릭터별 쿨타임(초) = girlTable DateCoolTime(분) x 60, 없으면 30초 */
-const coolSec = (girl: number) => { const m = Number(girls?.get(girl)?.DateCoolTime); return m > 0 ? Math.round(m * 60) : COOLTIME_SEC; };
+//   한계 돌파로 표의 등급보다 올라간 캐릭터는 20분 (실기록 2026-11-09~10: 20302 ★1 -> ★2 뒤 데이트 결과 17건 모두 1200초.
+//   같은 ★2 라도 원래 ★2 인 20104·20107·20206·20208·20301·20303·20503 은 300초 = 표 값). 돌파한 캐릭터 표본은 20302 하나뿐이라
+//   등급마다 20분인지, 돌파 단계에 따라 달라지는지는 미확인.
+const EXPANDED_COOLTIME_SEC = 1200;
+/** 캐릭터별 쿨타임(초) = girlTable DateCoolTime(분) x 60, 없으면 30초. 지금 등급(rarity)이 표 등급보다 높으면 20분 */
+const coolSec = (girl: number, rarity?: number) => {
+  const d = girls?.get(girl);
+  if (d && Number(rarity) > Number(d.Rarity)) return EXPANDED_COOLTIME_SEC;
+  const m = Number(d?.DateCoolTime); return m > 0 ? Math.round(m * 60) : COOLTIME_SEC;
+};
 
 interface Row { Id: number; ScriptName: string; FamiliarityLv: number; Step?: number; Function: string; TextTag?: string; Sound?: string;
   Parameter1?: string; Parameter2?: string; Parameter3?: string; Parameter4?: string; Parameter5?: string }
@@ -324,7 +332,7 @@ register('MsgDateStopReq', (_body, ctx): Msg[] => {
   const g = snap && st && myGirl(snap, st.girl);
   setState(ctx, null);
   if (!snap || !g) return [{ name: 'MsgDateResultAns', body: { Seq: 1, ...(snap ? { UserInfo: snap.UserInfo } : {}) } }];
-  g.DateCoolTime = Math.floor(Date.now() / 1000) + coolSec(Number(g.Girlid));
+  g.DateCoolTime = Math.floor(Date.now() / 1000) + coolSec(Number(g.Girlid), Number(g.Rarity));
   ctx.store.putUser(ctx.session.accountId, snap);
   return [{ name: 'MsgDateResultAns', body: { Seq: 1, GirlInfo: g, UserInfo: snap.UserInfo, GgraphPatch: { Gnode: [] }, CallScript: [],
     GirlMemorySet: snap.GirlMemorySet ?? { GirlMemory: [], Version: 1 } } }];
@@ -347,7 +355,7 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
   if (st.dept) return departmentProgress(snap, g, st, body, head, ctx, save);
   if (st.refused) { // 장소 거절: Index 1 에서 결과 0, 그 뒤 인덱스는 빈 응답
     if (depth === 0 && index === st.resultIndex && g) {
-      g.DateCoolTime = Math.floor(Date.now() / 1000) + coolSec(Number(g.Girlid));
+      g.DateCoolTime = Math.floor(Date.now() / 1000) + coolSec(Number(g.Girlid), Number(g.Rarity));
       setState(ctx, null); ctx.store.putUser(ctx.session.accountId, snap);
       return [{ name: 'MsgScriptProgressAns', body: head }, { name: 'MsgDateResultAns', body: { Seq: 2, GirlInfo: g, UserInfo: ui, DatePlace: st.place, DateResult: 0,
         UpdateGirlInfo: [], GirlMemorySet: snap.GirlMemorySet ?? { GirlMemory: [], Version: 1 }, GgraphPatch: { Gnode: [] }, CallScript: [] } }];
@@ -429,7 +437,7 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
     g.SameDateCnt = Number(g.LastDatePlace) === st.place ? (Number(g.SameDateCnt) || 0) + 1 : 0;
     g.NthDate = (Number(g.NthDate) || 0) + 1;
     g.LastDatePlace = st.place;
-    g.DateCoolTime = Math.floor(Date.now() / 1000) + coolSec(Number(g.Girlid));
+    g.DateCoolTime = Math.floor(Date.now() / 1000) + coolSec(Number(g.Girlid), Number(g.Rarity));
     g.DatingState ??= [];
     const ds = g.DatingState.find((x: any) => Number(x.Placeid) === st.place);
     if (ds) ds.MaxRecord = Math.max(Number(ds.MaxRecord) || 0, sat); else g.DatingState.push({ Placeid: st.place, MaxRecord: sat });
@@ -685,7 +693,7 @@ function departmentProgress(snap: any, g: any, st: DateState, body: any, head: a
       GirlInfo: { Girlid: girl, Familiarity: g.Familiarity, DeltaFamiliarity: gift?.delta ?? 0 } } }];
   }
   if (depth === 0 && index === st.finalIndex) {
-    g.DateCoolTime = Math.floor(Date.now() / 1000) + coolSec(Number(g.Girlid));
+    g.DateCoolTime = Math.floor(Date.now() / 1000) + coolSec(Number(g.Girlid), Number(g.Rarity));
     snap.GirlMemorySet ??= { GirlMemory: [], Version: 1 };
     let gm = snap.GirlMemorySet.GirlMemory.find((x: any) => Number(x.Girlid) === girl);
     if (!gm) { gm = { Girlid: girl, Memory: [] }; snap.GirlMemorySet.GirlMemory.push(gm); }
