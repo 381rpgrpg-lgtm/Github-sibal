@@ -691,23 +691,30 @@ async function lbDrive(ud) {
       if (!cashUnit) return did; // 코인이 모자라면 다음 대상으로 넘어가지 않고 모은다 (한 명씩 끝낸다, 2026-11-09)
     }
     const tryKey = `${OUT}/lb-try.json`; let tr = {}; try { tr = JSON.parse(fs.readFileSync(tryKey, 'utf8')); } catch {}
-    if (hasBikini && Number(g.Emotion) === 3 && lv >= 4 && coin >= Number(set.ExpansionCoin) + 20000 && Date.now() - (tr[gid] ?? 0) > 6 * 3600e3) {
+    // 다시 시도: 6시간 뒤, 또는 거절 뒤 데이트를 2회 더 했을 때 (lbDateTargets 가 그 2회를 채운다)
+    const ready = Date.now() - (tr[gid] ?? 0) > 6 * 3600e3 || (tr['n' + gid] && Number(g.NthDate) >= tr['n' + gid]);
+    if (hasBikini && Number(g.Emotion) === 3 && lv >= 4 && coin >= Number(set.ExpansionCoin) + 20000 && ready) {
       tr[gid] = Date.now(); fs.writeFileSync(tryKey, JSON.stringify(tr));
       const ms = await rpc('MsgGirlRarityExpandReq', { GirlInfo: { Girlid: gid } });
       const a = ms.find((m) => m.name === 'MsgGirlRarityExpandAns')?.body;
       act(`lb rarity expand ${gid} (${g.Rarity} -> ${set.TargetRarity}, broken ${broken}): Result ${a?.Result} coin ${coin} -> ${a?.UserInfo?.Coin ?? '?'} crits ${JSON.stringify((set.SGirlExpansionCrit ?? []).map((c) => [c.CritType, c.Param1]))} dates ${g.NthDate}`);
+      // 거절(Result 2)이면 봇이 못 보는 조건(데이트 별 합계 CritType 2 등)이 남은 것으로 보고 데이트 2회 뒤 다시 (거절 3번까지)
+      if (a?.Result !== 1) { tr['f' + gid] = (tr['f' + gid] ?? 0) + 1; if (tr['f' + gid] <= 3) tr['n' + gid] = Number(g.NthDate) + 2; else delete tr['n' + gid]; fs.writeFileSync(tryKey, JSON.stringify(tr)); }
       return true;
     }
-    if (hasBikini && Number(g.Emotion) === 3 && lv >= 4 && Date.now() - (tr[gid] ?? 0) > 6 * 3600e3) return did; // 확장 코인을 모으는 중
+    if (hasBikini && Number(g.Emotion) === 3 && lv >= 4 && ready) return did; // 확장 코인을 모으는 중
   }
   return did;
 }
 // 데이트로 올려야 하는 한계 돌파 대상: 호감도 4단계 미만, 또는 데이트 횟수 조건(CritType 1)이 남은 캐릭터 (앞의 두 명만, 코인을 한곳에 모은다)
+//   데이트 별 합계(CritType 2)는 서버만 안다: 회당 별 3개로 어림해 그만큼의 횟수를 채우고, 돌파가 거절되면 2회 더 (lb-try.json n{캐릭터}).
+//   (2026-11-10: 마지막 대상 20101 은 [2,26] 인데 데이트 8회, 실기록 7회의 별 합계 18. 같은 조건의 20102 는 24회·112개로 통과)
 function lbDateTargets(ud) {
-  const out = [];
+  const out = []; let tr = {}; try { tr = JSON.parse(fs.readFileSync(`${OUT}/lb-try.json`, 'utf8')); } catch {}
   for (const g of lbTargets(ud).list) {
     const set = (GIRLT.Girl.find((x) => x.Id === g.Girlid)?.SGirlExpansionCritSet ?? []).find((x) => Number(x.TargetRarity) === Number(g.Rarity) + 1);
-    const nDate = set?.SGirlExpansionCrit?.find((c) => c.CritType === 1)?.Param1 ?? 0;
+    const crit = (t) => set?.SGirlExpansionCrit?.find((c) => c.CritType === t)?.Param1 ?? 0;
+    const nDate = Math.max(crit(1), Math.ceil(crit(2) / 3), Number(tr['n' + g.Girlid]) || 0);
     if (famLv(g.Girlid, Number(g.Familiarity) || 0) < 4 || Number(g.NthDate) < nDate || Number(g.Emotion) !== 3) out.push(g.Girlid);
     if (out.length >= 2) break;
   }
