@@ -117,7 +117,16 @@ function partsBox(si: any, box: any, body: any, snap: any, ctx: any): Msg[] {
 // 차량 상자 (실기록: 71026 무료 일일 상자 -> 10501 BEEMER 1, 73008 코인 상자 6900 -> 10501·10201).
 //   응답 {Result, StoreItemId, UserInfo, RewardInfo{.., CarInfo[새 차량], ContainerGrade 1}, Cost, Buycount, GachaPity, PartsPity, PartsPityHq}
 //   무료 상자: UserData.OnedayFreeShop [{StoreItemId}] 에 있고 ExipreTime 이 없거나 지났으면 무료, 사용 후 ExipreTime = +24h (실기록 형식)
-// 추정: 확률 등급(common..ultra) -> 차량 ★1..5, 그 등급에서 Distribute>0 차량 균등 추첨.
+// 추정: 확률 등급(common..ultra) -> 차량 ★1..5, 그 등급에서 Distribute>0 차량 균등 추첨. 실측과 맞지 않아 표본이 있는 상자는 아래 표본 비율로 뽑는다.
+// 실측 표본 (봇 기록 2026-11-02 ~ 11-11, 상자별 나온 차종 x 횟수). 가챠별 차종 목록이 없어 위 추정은 ★1·★2 비율이 크게 틀린다:
+//   73008 코인 상자 추정 ★1 95%·★2 5% 대 실측 35상자 ★1 12·★2 21·★3 2. 72007 소셜 상자 실측 20상자 ★1 14·★2 4·★3 2. 71026 무료 일일 상자 10상자 ★1 6·★2 4 (첫 실기록 10501 포함).
+//   ★3 비율은 'common = ★1·★2, rare 이상 = ★3 이상' 으로 읽으면 세 상자 모두 맞는다 (73008 5.7% 대 rare 5.2%, 72007 10% 대 6.5%, 71026 0/10 대 4.8%).
+//   ★1·★2 비율은 상자마다 달라 (73008 12:21, 72007 14:4, 71026 6:4) 표본 비율을 그대로 쓴다. 표본에 없던 차종은 나오지 않는다 (표본 수 한계).
+const OBSERVED_CARBOX: Record<number, Record<number, number>> = {
+  73008: { 10101: 6, 10102: 3, 10103: 1, 10201: 1, 10202: 3, 10301: 3, 10302: 3, 10402: 2, 10501: 2, 10502: 5, 10602: 1, 10603: 1, 10702: 1, 10902: 2, 11002: 1 },
+  72007: { 10101: 6, 10103: 1, 10201: 5, 10302: 1, 10401: 2, 10402: 1, 10501: 1, 10502: 1, 10503: 1, 11002: 1 },
+  71026: { 10101: 1, 10201: 1, 10202: 1, 10301: 1, 10401: 2, 10402: 1, 10501: 1, 10502: 1, 10902: 1 },
+};
 function carBox(si: any, box: any, body: any, snap: any, ctx: any): Msg[] {
   const id = Number(si.Id);
   const ui = snap.UserInfo;
@@ -133,10 +142,18 @@ function carBox(si: any, box: any, body: any, snap: any, ctx: any): Msg[] {
   if ((Number(ui.Cash) || 0) < price.Cash) return fail(R_NO_CASH, id);
   if ((Number(ui.Coin) || 0) < price.Coin || (Number(ui.SocialPoint) || 0) < price.SocialPoint) return fail(R_NO_COIN, id);
   ui.Cash -= price.Cash; ui.Coin -= price.Coin; ui.SocialPoint = (Number(ui.SocialPoint) || 0) - price.SocialPoint;
-  let r = Math.random(), tier = 0;
-  for (let i = 0; i < TIERS.length; i++) { r -= Number(box.tiers?.[TIERS[i]]) || 0; if (r < 0) { tier = i; break; } }
-  const pool = [...carDefs!.values()].filter((c: any) => Number(c.Grade) === tier + 1 && Number(c.Distribute) > 0);
-  const def = pool[Math.floor(Math.random() * pool.length)] ?? carDefs!.get(10101);
+  const seen = OBSERVED_CARBOX[id];
+  let def: any;
+  if (seen) {
+    let w = Math.random() * Object.values(seen).reduce((a, b) => a + b, 0);
+    for (const [t, n] of Object.entries(seen)) { w -= n; if (w < 0) { def = carDefs!.get(Number(t)); break; } }
+  } else {
+    let r = Math.random(), tier = 0;
+    for (let i = 0; i < TIERS.length; i++) { r -= Number(box.tiers?.[TIERS[i]]) || 0; if (r < 0) { tier = i; break; } }
+    const pool = [...carDefs!.values()].filter((c: any) => Number(c.Grade) === tier + 1 && Number(c.Distribute) > 0);
+    def = pool[Math.floor(Math.random() * pool.length)];
+  }
+  def ??= carDefs!.get(10101);
   const car = newOwnedCar(snap, Number(def.Id));
   snap.Cars.CarInfo.push(car);
   if (free) free.ExipreTime = nowS + 86400;
