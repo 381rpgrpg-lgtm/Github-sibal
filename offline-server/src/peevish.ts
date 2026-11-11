@@ -45,10 +45,12 @@ export const RACE_INVITE = 14;
 /** 삐침이 생긴 결과 응답의 CallScript 항목. 대본 이름 끝 A/B/C = 그 원인이 들어 있는 girlTable PeevishCondition1/2/3 칸
  *  (실기록 6건 모두 일치: 20101·20303 원인 11 칸1 A, 20206 원인 13 칸1 A, 20505 원인 12 칸1 A, 20208 원인 9 칸2 B, 20103 원인 14 칸2 B).
  *  FmLevel = 그 캐릭터의 친밀도 단계. 데이트 결과(원인 11·13)와 레이스 결과(원인 9·12·14) 모두 같은 형식. */
-export function peevishScript(girlId: number, cause: number, def: any, fmLevel: number): { Name: string; Girlid: number; FmLevel: number } | null {
+export function peevishScript(girlId: number, cause: number, def: any, fmLevel: number, clear = false): { Name: string; Girlid: number; FmLevel: number } | null {
   const n = [1, 2, 3].find((k) => Number(def?.[`PeevishCondition${k}`]) === cause);
-  return n ? { Name: `Date_Peevish_Condition_${'ABC'[n - 1]}`, Girlid: girlId, FmLevel: fmLevel } : null;
+  return n ? { Name: `${clear ? 'Date_End_Peevish_Clear_' : 'Date_Peevish_Condition_'}${'ABC'[n - 1]}`, Girlid: girlId, FmLevel: fmLevel } : null;
 }
+// 삐침이 풀린 결과 응답에는 Date_End_Peevish_Clear_<같은 칸> (실기록 9건: 데이트로 원인 9·11·13, 레이스로 원인 12(20505 11-10 20:56)·14(20103 11-11 04:17)).
+//   안 풀린 데이트(원인 12·14 상태의 데이트 5회)에는 CallScript 가 비어 있다.
 
 /** 본편 레이스(동승 가능한 레이스, 기권 제외)가 끝났을 때 원인 12·14 판정.
  *  - 동승자: 원인 12·14 셈을 0 으로. 원인 12 삐침은 풀리고, 원인 14 삐침은 이겼을 때 풀린다.
@@ -65,6 +67,7 @@ export function racePeevish(snap: any, passengerId: number, win: boolean, gdef: 
       if (cnt[id]) { cnt[id][RIVAL_RIDE] = 0; cnt[id][RACE_INVITE] = 0; }
       const cause = Number(y.CauseOfPeevish);
       if (Number(y.Emotion) === 1 && (cause === RIVAL_RIDE || (cause === RACE_INVITE && win))) {
+        const sc = peevishScript(id, cause, gdef(id), fmLevel(id, Number(y.Familiarity) || 0), true); if (sc) scripts.push(sc);
         y.Emotion = 0; y.CauseOfPeevish = 0; y.SolutionForPeevish = 0;
         delete snap.peevishSince?.[id]; delete snap.peevishApplied?.[id];
         girls.push(y);

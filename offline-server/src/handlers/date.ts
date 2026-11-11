@@ -485,11 +485,16 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
     //   싫어한 답이 있는 만족도 1 데이트 -> 화남 (즐거움 -> 화남 1건, 화남 유지 4건; 클라이언트 안내 '다른 대답을 해 보세요')
     //   화남: 3·5 -> 보통 (2건). 백화점 데이트(만족도 0)는 그대로. 삐침(1)은 서버 주기 판정(girlTable PeevishCondition/Value) — 미구현, 그대로 둔다.
     //   추정: 싫어함 1개로 만족도 2 가 된 경우도 화남, 화남에서 4 -> 보통
+    const clearCalls: any[] = []; // 삐침이 풀리면 Date_End_Peevish_Clear_<칸> (peevish.ts peevishScript)
     {
       const e = Number(g.Emotion) || 0;
       // 원인 12(라이벌 동승)·14(레이스 초대)는 데이트로 안 풀린다 (실기록 2026-11-10 20505 데이트 3회, 2026-11-11 20103 데이트 2회, 기분 1 유지)
       //   -> 동승 레이스로 (peevish.ts racePeevish)
-      if (st.peevish && ![RIVAL_RIDE, RACE_INVITE].includes(Number(g.CauseOfPeevish))) { g.Emotion = 0; g.CauseOfPeevish = 0; g.SolutionForPeevish = 0; }
+      if (st.peevish && ![RIVAL_RIDE, RACE_INVITE].includes(Number(g.CauseOfPeevish))) {
+        const sc = peevishScript(Number(g.Girlid), Number(g.CauseOfPeevish), gdef(Number(g.Girlid)), famLevel(g, Number(g.Familiarity) || 0), true);
+        if (sc) clearCalls.push(sc);
+        g.Emotion = 0; g.CauseOfPeevish = 0; g.SolutionForPeevish = 0;
+      }
       else if (st.peevish) { /* 기분 1 유지 */ }
       else if (e !== 1 && sat > 0) {
         if (sat <= 2 && st.dislikes > 0) g.Emotion = 2;
@@ -533,7 +538,7 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
       { name: 'MsgScriptProgressAns', body: head },
       { name: 'MsgDateResultAns', body: {
         Seq: 2, GirlInfo: g, UserInfo: ui, DatePlace: st.place, DateResult: sat, UpdateGirlInfo: updateGirl,
-        GirlMemorySet: snap.GirlMemorySet, GgraphPatch: { Gnode: patch }, CallScript: peevishCalls, ...(propChanged ? { PropertySet: snap.PropertySet } : {}),
+        GirlMemorySet: snap.GirlMemorySet, GgraphPatch: { Gnode: patch }, CallScript: [...clearCalls, ...peevishCalls], ...(propChanged ? { PropertySet: snap.PropertySet } : {}),
       } },
       ...(questChanges.length ? [{ name: 'MsgUpdateNquest', body: { Seq: 3, NquestInfo: questChanges } }] : []),
       ...(raceUpdate.length ? [{ name: 'MsgUpdateData', body: { Seq: 4, UpdateData: { RaceZone: raceUpdate } } }] : []),
@@ -549,10 +554,13 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
 //   20102 와 데이트 10회째(이전 2 + 실험 8) 결과에서 20101 이 기분 1·CauseOfPeevish 11·SolutionForPeevish 11 이 되었고,
 //   그 데이트의 MsgDateResultAns.UpdateGirlInfo 에 20101 레코드 전체가 실렸다. 20101 과 데이트하자 풀림(위 st.peevish).
 //   센 값은 snap.peevishCount[캐릭터][조건] (그 캐릭터와 데이트하면 0).
-//   조건 13('다른 아가씨와 잦은 데이트')은 같은 방식이 아니다: 기록상 20206(13, 값 45)은 자기 마지막 데이트 뒤 다른 캐릭터 데이트 62회에도 삐치지 않았다.
-//   그 밖의 조건(1 불만족 데이트, 9 레이스만, 10 데이트만, 12 라이벌 동승, 13 등)은 미확인 — 2026-11-05 실험: 싫어한 답 데이트 5회(조건 1, 값 5)는
-//   삐침이 아니라 화남(2)만 되었다.
-function rivalPeevish(snap: any, dated: number): any[] {
+// 조건 13('다른 아가씨와 잦은 데이트', 안내문 "저랑도 데이트를 좀 해 주세요"): 그 캐릭터의 마지막 데이트(백화점 포함) 뒤 다른 캐릭터와의 데이트
+//   (백화점 포함) 횟수가 값에 닿으면 그 데이트 결과에서 삐침. 실기록 4건(값 45): 20206 11-10 12:21·11-11 01:53, 20301 11-11 04:36 은 45회째,
+//   20206 11-09 11:49 는 46회째(1 차이, 원인 미확인). 20206 은 11-05 친밀도 1단계(148)일 때 45회를 넘고도 안 삐쳤다 -> 친밀도 3단계 이상만 (추정).
+//   그 밖의 조건(1 불만족 데이트, 9 레이스만, 10 데이트만 등)은 미확인 — 2026-11-05 실험: 싫어한 답 데이트 5회(조건 1, 값 5)는
+//   삐침이 아니라 화남(2)만 되었다. 12·14 는 레이스 쪽(peevish.ts racePeevish).
+export function rivalPeevish(snap: any, dated: number): any[] {
+  init();
   const cnt: Record<string, Record<string, number>> = (snap.peevishCount ??= {});
   cnt[dated] = {};
   const out: any[] = [];
@@ -562,7 +570,8 @@ function rivalPeevish(snap: any, dated: number): any[] {
     const def = gdef(id); if (!def) continue;
     for (const n of [1, 2, 3]) {
       const cond = Number(def[`PeevishCondition${n}`]) || 0, val = Number(def[`PeevishValue${n}`]) || 0;
-      if (!val || !(cond === 11 && Number(def.RivalGirl) === dated)) continue;
+      if (!val || !((cond === 11 && Number(def.RivalGirl) === dated) || cond === 13)) continue;
+      if (cond === 13 && famLevel(y, Number(y.Familiarity) || 0) < 3) continue;
       const c = (cnt[id] ??= {});
       c[cond] = (c[cond] ?? 0) + 1;
       if (c[cond] >= val && Number(y.Emotion) !== 1) {
@@ -717,11 +726,15 @@ function departmentProgress(snap: any, g: any, st: DateState, body: any, head: a
       if (!m) { m = { Id: Number(def.Id), FmFlag: 0, RewardState: 2, MemoryName: n }; gm.Memory.push(m); }
       m.FmFlag = (Number(m.FmFlag) || 0) | (1 << (lv - 1));
     }
+    // 백화점 데이트도 데이트 횟수로 센다 (조건 11·13: 실기록 20301 은 마지막 데이트가 백화점(11-10 14:50)이었고 그 뒤 45회째에 삐침)
+    const deptUpdate = rivalPeevish(snap, girl);
+    const deptCalls = deptUpdate.filter((y) => Number(y.Emotion) === 1)
+      .map((y) => peevishScript(Number(y.Girlid), Number(y.CauseOfPeevish), gdef(Number(y.Girlid)), famLevel(y, Number(y.Familiarity) || 0))).filter(Boolean);
     setState(ctx, null);
     ctx.store.putUser(ctx.session.accountId, snap);
     return [
       { name: 'MsgScriptProgressAns', body: head },
-      { name: 'MsgDateResultAns', body: { Seq: 2, GirlInfo: g, UserInfo: ui, GgraphPatch: { Gnode: [] }, CallScript: [], UpdateGirlInfo: [],
+      { name: 'MsgDateResultAns', body: { Seq: 2, GirlInfo: g, UserInfo: ui, GgraphPatch: { Gnode: [] }, CallScript: deptCalls, UpdateGirlInfo: deptUpdate,
         GirlMemorySet: snap.GirlMemorySet } },
     ];
   }
