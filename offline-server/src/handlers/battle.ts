@@ -25,8 +25,8 @@ import { refreshQuests, questEvent } from '../quests.js';
 import { isEventZone, eventStart, eventResult, eventReward } from './event.js';
 import { weeklyStart, weeklyResult } from './weekly.js';
 import { worldTourStart, worldTourResult } from './worldtour.js';
-import { table as gtable, areaOf, areaRace, finalAttr, makeOpponent, newOwnedCar, randomPart, grantPart, carDefOf, relativeDifficulty, syncGirl, girlDef } from '../gamecalc.js';
-import { ridePeevish } from '../peevish.js';
+import { table as gtable, areaOf, areaRace, finalAttr, makeOpponent, newOwnedCar, randomPart, grantPart, carDefOf, relativeDifficulty, syncGirl, girlDef, famLevel } from '../gamecalc.js';
+import { racePeevish } from '../peevish.js';
 
 const ST = { PLAYABLE: 1, CLEAR: 2, FAIL: 4, LOCKED: 8, WIN: 16 } as const;
 function timeAttackScript(zoneId: number, kind: 'Start' | 'Win'): string | null {
@@ -428,9 +428,14 @@ register('MsgBattleResultReq', (body, ctx: Ctx): Msg[] => {
   // 동승 캐릭터 친밀도
   const updateGirl: any[] = [];
   const passenger = passengerOn ? (snap.MyGirls?.MyGirlInfo ?? []).find((g: any) => Number(g.Girlid) === Number(ui.PassengerGirl)) : null;
-  // 삐침 조건 12(라이벌 동승): 동승한 캐릭터의 그 삐침은 풀리고, 그 캐릭터를 라이벌로 둔 캐릭터는 횟수가 찬다 (peevish.ts, 실기록 2026-11-10 20505)
+  // 삐침 조건 12(라이벌 동승)·14(레이스 초대): 동승한 캐릭터의 그 삐침은 풀리고(14 는 승리 때), 다른 캐릭터는 횟수가 찬다
+  //   (peevish.ts racePeevish, 실기록 2026-11-10 20505 원인 12, 2026-11-11 20103 원인 14). 새로 삐치면 CallScript Date_Peevish_Condition_<칸>.
   //   푸는 레이스에서도 친밀도는 오른다 (실기록 +10) -> 친밀도보다 먼저
-  if (passengerOn && !withdraw && Number(ui.PassengerGirl) > 0) updateGirl.push(...ridePeevish(snap, Number(ui.PassengerGirl), girlDef));
+  if (passengerOn && !withdraw) {
+    const rp = racePeevish(snap, Number(ui.PassengerGirl) || 0, win, girlDef, famLevel);
+    updateGirl.push(...rp.girls);
+    if (rp.scripts.length) extra.CallScript = [...(extra.CallScript ?? []), ...rp.scripts];
+  }
   // 삐친 캐릭터(Emotion 1)는 레이스로 호감도가 오르지 않는다 (클라이언트 안내 battle_result_notice_peevish)
   if (passenger && fam && Number(passenger.Emotion) !== 1) { passenger.Familiarity = (Number(passenger.Familiarity) || 0) + fam; syncGirl(passenger); if (!updateGirl.includes(passenger)) updateGirl.push(passenger); }
 

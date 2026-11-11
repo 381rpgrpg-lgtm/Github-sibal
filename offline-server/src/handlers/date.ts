@@ -22,7 +22,7 @@
 //   - 종료 대본: 좋아함>싫어함 Good, 같으면 Basic, 적으면 Bad. 채팅 이벤트는 조건(ChatConditionA..C) 충족 중 무작위(튜토리얼은 A)
 //   - 백화점(DateType 3) 데이트는 아래 departmentStart/departmentProgress.
 import { readFileSync, existsSync } from 'node:fs';
-import { markPeevish, RIVAL_RIDE } from '../peevish.js';
+import { markPeevish, RIVAL_RIDE, RACE_INVITE, peevishScript } from '../peevish.js';
 import { register, type Msg, type Ctx } from '../rpc.js';
 import { bumpProperty, levelUp } from './battle.js';
 import { ensureGirl, expansionReady } from './girls.js';
@@ -487,8 +487,9 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
     //   추정: 싫어함 1개로 만족도 2 가 된 경우도 화남, 화남에서 4 -> 보통
     {
       const e = Number(g.Emotion) || 0;
-      // 원인 12(라이벌 동승)는 데이트로 안 풀린다 (실기록 2026-11-10 20505 데이트 3회, 기분 1 유지) -> 동승 레이스로 (peevish.ts ridePeevish)
-      if (st.peevish && Number(g.CauseOfPeevish) !== RIVAL_RIDE) { g.Emotion = 0; g.CauseOfPeevish = 0; g.SolutionForPeevish = 0; }
+      // 원인 12(라이벌 동승)·14(레이스 초대)는 데이트로 안 풀린다 (실기록 2026-11-10 20505 데이트 3회, 2026-11-11 20103 데이트 2회, 기분 1 유지)
+      //   -> 동승 레이스로 (peevish.ts racePeevish)
+      if (st.peevish && ![RIVAL_RIDE, RACE_INVITE].includes(Number(g.CauseOfPeevish))) { g.Emotion = 0; g.CauseOfPeevish = 0; g.SolutionForPeevish = 0; }
       else if (st.peevish) { /* 기분 1 유지 */ }
       else if (e !== 1 && sat > 0) {
         if (sat <= 2 && st.dislikes > 0) g.Emotion = 2;
@@ -518,6 +519,9 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
     for (const n of unlock.nodes) if (!patch.includes(n)) patch.push(n);
     const raceUpdate = [...unlock.races].map(([ZoneId, ChangeRace]) => ({ ZoneId, ChangeRace }));
     const updateGirl = rivalPeevish(snap, st.girl);
+    // 새로 삐친 캐릭터마다 CallScript Date_Peevish_Condition_<칸> (실기록 2026-11-05 20101·20303 원인 11, 11-09·11-10·11-11 20206 원인 13: 데이트 결과에 실림)
+    const peevishCalls = updateGirl.filter((y) => Number(y.Emotion) === 1)
+      .map((y) => peevishScript(Number(y.Girlid), Number(y.CauseOfPeevish), gdef(Number(y.Girlid)), famLevel(y, Number(y.Familiarity) || 0))).filter(Boolean);
     const propChanged = bumpProperty(snap, 'DQUEST_DATE', 1);
     // 퀘스트 사건 4: [횟수, 캐릭터|[FIRSTGIRL], 장소?, 만족도 이상?] (10101 호텔뷔페 42082, 10204 만족도 4 이상 3회)
     questEvent(snap, 4, (p) => (!p[1] || p[1] === '[FIRSTGIRL]' ? Number(snap.UserInfo?.FirstGirl) : Number(p[1])) === st.girl
@@ -529,7 +533,7 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
       { name: 'MsgScriptProgressAns', body: head },
       { name: 'MsgDateResultAns', body: {
         Seq: 2, GirlInfo: g, UserInfo: ui, DatePlace: st.place, DateResult: sat, UpdateGirlInfo: updateGirl,
-        GirlMemorySet: snap.GirlMemorySet, GgraphPatch: { Gnode: patch }, CallScript: [], ...(propChanged ? { PropertySet: snap.PropertySet } : {}),
+        GirlMemorySet: snap.GirlMemorySet, GgraphPatch: { Gnode: patch }, CallScript: peevishCalls, ...(propChanged ? { PropertySet: snap.PropertySet } : {}),
       } },
       ...(questChanges.length ? [{ name: 'MsgUpdateNquest', body: { Seq: 3, NquestInfo: questChanges } }] : []),
       ...(raceUpdate.length ? [{ name: 'MsgUpdateData', body: { Seq: 4, UpdateData: { RaceZone: raceUpdate } } }] : []),

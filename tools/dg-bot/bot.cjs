@@ -426,7 +426,7 @@ async function manage() {
       let keepPeevish = []; try { keepPeevish = JSON.parse(fs.readFileSync(`${OUT}/peevish-keep.json`, 'utf8')); } catch {}
       // 단, 삐침 원인 12(라이벌 동승)는 데이트로 안 풀린다 (2026-11-10 20505: 라이벌 20504 동승 15회 뒤 삐침, 19:46·20:06·20:26 데이트 3회 = 코인 11,500 써도 기분 1 그대로)
       //   -> 아래 동승자 선택에서 삐친 캐릭터를 동승자로 바꿔 푼다
-      for (const x of ud.MyGirls?.MyGirlInfo ?? []) if (x.State === 7 && Number(x.Emotion) === 1 && Number(x.CauseOfPeevish) !== 12 && !keepPeevish.includes(x.Girlid)) want.set(x.Girlid, { q: 'peevish', place: 0 });
+      for (const x of ud.MyGirls?.MyGirlInfo ?? []) if (x.State === 7 && Number(x.Emotion) === 1 && ![12, 14].includes(Number(x.CauseOfPeevish)) && !keepPeevish.includes(x.Girlid)) want.set(x.Girlid, { q: 'peevish', place: 0 });
       // run/date-priority.json {캐릭터: 남은 횟수}: 쿨타임이 끝나면 우선 데이트 (예: FM 부스트 뒤 3회면 호감도 최대, 2026-11-06 지아 20208)
       let prio = {}; try { prio = JSON.parse(fs.readFileSync(`${OUT}/date-priority.json`, 'utf8')); } catch {}
       for (const [gidS, left] of Object.entries(prio)) { const gg = Number(gidS), x = (ud.MyGirls?.MyGirlInfo ?? []).find((y) => y.Girlid === gg);
@@ -1294,9 +1294,10 @@ async function finishRace(t, tp, phases) {
     // 삐침 조건 12(라이벌 동승, 값 = 횟수): 그 캐릭터의 RivalGirl 을 동승자로 두면 N회 뒤 삐친다 (2026-11-10 20505 <- 20504 15회).
     //   삐친 캐릭터가 있으면 그 캐릭터를 동승자로 바꿔 보고, 해금 대상이 누군가의 조건 12 라이벌이면 동승자로 두지 않는다 (동승 친밀도 이득은 경주당 +10~30 뿐)
     const gdefB = (id) => GIRLT.Girl.find((x) => x.Id === id);
-    const p12 = (ud.MyGirls?.MyGirlInfo ?? []).find((g) => g.State === 7 && Number(g.Emotion) === 1 && Number(g.CauseOfPeevish) === 12);
+    const p12 = (ud.MyGirls?.MyGirlInfo ?? []).find((g) => g.State === 7 && Number(g.Emotion) === 1 && [12, 14].includes(Number(g.CauseOfPeevish)));
+    // 원인 14('저도 레이스에 초대 좀 해 주세요', 해법 '함께 레이스를 해서 승리하세요')도 동승 레이스로 푼다 (2026-11-11 20103: 데이트 2회로 안 풀림)
     const rival12 = (id) => (ud.MyGirls?.MyGirlInfo ?? []).some((g) => g.State === 7 && Number(gdefB(g.Girlid)?.RivalGirl) === id && [1, 2, 3].some((n) => Number(gdefB(g.Girlid)?.[`PeevishCondition${n}`]) === 12));
-    if (!rideObj && p12 && Number(ud.UserInfo.PassengerGirl) !== p12.Girlid) { const a = pick(await rpc('MsgSelectPassengerReq', { Passenger: p12.Girlid }), 'MsgSelectPassengerAns'); act(`passenger -> ${p12.Girlid} (peevish 12 fix, rival ${gdefB(p12.Girlid)?.RivalGirl}): Result ${a?.Result}`); }
+    if (!rideObj && p12 && Number(ud.UserInfo.PassengerGirl) !== p12.Girlid) { const a = pick(await rpc('MsgSelectPassengerReq', { Passenger: p12.Girlid }), 'MsgSelectPassengerAns'); act(`passenger -> ${p12.Girlid} (peevish ${p12.CauseOfPeevish} fix, rival ${gdefB(p12.Girlid)?.RivalGirl}): Result ${a?.Result}`); }
     else if (!rideObj && !p12 && unlockGirl && !rival12(unlockGirl) && Number(ud.UserInfo.PassengerGirl) !== unlockGirl) { const a = pick(await rpc('MsgSelectPassengerReq', { Passenger: unlockGirl }), 'MsgSelectPassengerAns'); act(`passenger -> ${unlockGirl} (girl unlock): Result ${a?.Result}`); }
     if (rideObj && !questCar && !SAFE.progressSkipped(`ride:${rideObj.Id}:${rideObj.ObjId}`)) { // 한 번이면 끝나므로 드롭 파밍보다 먼저
       const gid = Number(rideObj.Param[4]), rz = Number(rideObj.Param[1]);

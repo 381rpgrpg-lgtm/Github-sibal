@@ -33,34 +33,63 @@ export function peevishDecay(snap: any, nowSec = Date.now() / 1000): any[] {
 //   MsgBattleResultAns.UpdateGirlInfo 에 20505 기분 0·원인 0, 친밀도 +10 으로 풀렸다.
 //   센 값은 snap.peevishCount[캐릭터][12]. 그 캐릭터가 동승하거나 데이트하면 0 (추정: 기록상 둘 다 17:06~17:17 에 있었다).
 export const RIVAL_RIDE = 12;
-/** a race finished with `passengerId` riding: resolve that girl's rival-ride sulk, count the rival rides of the others.
- *  returns the girls whose record changed (for UpdateGirlInfo) */
-export function ridePeevish(snap: any, passengerId: number, gdef: (id: number) => any, nowSec = Date.now() / 1000): any[] {
+// ── 삐침 조건 14 '레이스 초대' (값 = 횟수; 안내문 peevish_info_title14 "저도 레이스에 초대 좀 해 주세요", desc14 "함께 레이스를 해서 승리하세요") ──
+// 실기록 2026-11-11 (20103, 조건 14 값 65 = PeevishCondition2):
+//   20103 이 마지막으로 동승한 레이스(11-10 17:06 이전) 뒤 다른 캐릭터를 태운 본편 레이스 66회째(01:21:50) 결과
+//   UpdateGirlInfo 에 20103 기분 1·CauseOfPeevish 14·SolutionForPeevish 14, CallScript [Date_Peevish_Condition_B, 20103, FmLevel 4].
+//   그 사이 주간 레이스 3회는 셈에 넣지 않았다(넣으면 69회). 66 = 값 + 1 이라 '값을 넘으면' 으로 둔다 (추정: 1건, 12 는 '값에 닿으면').
+//   데이트 2회(01:21·03:41, 만족도 5·4)로는 안 풀렸고, 20103 을 동승자로 바꾼 첫 레이스(04:17, 승리) 결과에서 기분 0·원인 0.
+//   패배한 동승 레이스로도 풀리는지는 미확인 (안내문대로 승리 때만 푼다).
+export const RACE_INVITE = 14;
+
+/** 삐침이 생긴 결과 응답의 CallScript 항목. 대본 이름 끝 A/B/C = 그 원인이 들어 있는 girlTable PeevishCondition1/2/3 칸
+ *  (실기록 6건 모두 일치: 20101·20303 원인 11 칸1 A, 20206 원인 13 칸1 A, 20505 원인 12 칸1 A, 20208 원인 9 칸2 B, 20103 원인 14 칸2 B).
+ *  FmLevel = 그 캐릭터의 친밀도 단계. 데이트 결과(원인 11·13)와 레이스 결과(원인 9·12·14) 모두 같은 형식. */
+export function peevishScript(girlId: number, cause: number, def: any, fmLevel: number): { Name: string; Girlid: number; FmLevel: number } | null {
+  const n = [1, 2, 3].find((k) => Number(def?.[`PeevishCondition${k}`]) === cause);
+  return n ? { Name: `Date_Peevish_Condition_${'ABC'[n - 1]}`, Girlid: girlId, FmLevel: fmLevel } : null;
+}
+
+/** 본편 레이스(동승 가능한 레이스, 기권 제외)가 끝났을 때 원인 12·14 판정.
+ *  - 동승자: 원인 12·14 셈을 0 으로. 원인 12 삐침은 풀리고, 원인 14 삐침은 이겼을 때 풀린다.
+ *  - 그 밖의 캐릭터: 동승자를 라이벌로 둔 원인 12 셈 +1 (값에 닿으면 삐침), 원인 14 셈 +1 (값을 넘으면 삐침).
+ *  returns { girls: 기록이 바뀐 캐릭터(UpdateGirlInfo), scripts: 새로 삐친 캐릭터의 CallScript 항목 } */
+export function racePeevish(snap: any, passengerId: number, win: boolean, gdef: (id: number) => any,
+  fmLevel: (girlId: number, fam: number) => number, nowSec = Date.now() / 1000): { girls: any[]; scripts: any[] } {
   const cnt: Record<string, Record<string, number>> = (snap.peevishCount ??= {});
-  const out: any[] = [];
+  const girls: any[] = [], scripts: any[] = [];
   for (const y of snap.MyGirls?.MyGirlInfo ?? []) {
     const id = Number(y.Girlid);
     if (Number(y.State) !== 7) continue;
     if (id === passengerId) {
-      if (cnt[id]) cnt[id][RIVAL_RIDE] = 0;
-      if (Number(y.Emotion) === 1 && Number(y.CauseOfPeevish) === RIVAL_RIDE) {
+      if (cnt[id]) { cnt[id][RIVAL_RIDE] = 0; cnt[id][RACE_INVITE] = 0; }
+      const cause = Number(y.CauseOfPeevish);
+      if (Number(y.Emotion) === 1 && (cause === RIVAL_RIDE || (cause === RACE_INVITE && win))) {
         y.Emotion = 0; y.CauseOfPeevish = 0; y.SolutionForPeevish = 0;
         delete snap.peevishSince?.[id]; delete snap.peevishApplied?.[id];
-        out.push(y);
+        girls.push(y);
       }
       continue;
     }
-    const def = gdef(id); if (!def || Number(def.RivalGirl) !== passengerId) continue;
+    const def = gdef(id); if (!def) continue;
     for (const n of [1, 2, 3]) {
-      if (Number(def[`PeevishCondition${n}`]) !== RIVAL_RIDE) continue;
-      const val = Number(def[`PeevishValue${n}`]) || 0; if (!val) continue;
+      const cond = Number(def[`PeevishCondition${n}`]) || 0, val = Number(def[`PeevishValue${n}`]) || 0;
+      if (!val || !(cond === RACE_INVITE || (cond === RIVAL_RIDE && passengerId > 0 && Number(def.RivalGirl) === passengerId))) continue;
       const c = (cnt[id] ??= {});
-      c[RIVAL_RIDE] = (c[RIVAL_RIDE] ?? 0) + 1;
-      if (c[RIVAL_RIDE] >= val && Number(y.Emotion) !== 1) {
-        y.Emotion = 1; y.CauseOfPeevish = RIVAL_RIDE; y.SolutionForPeevish = RIVAL_RIDE; markPeevish(snap, id, nowSec);
-        c[RIVAL_RIDE] = 0; out.push(y);
+      c[cond] = (c[cond] ?? 0) + 1;
+      const due = cond === RIVAL_RIDE ? c[cond] >= val : c[cond] > val;
+      if (due && Number(y.Emotion) !== 1) {
+        y.Emotion = 1; y.CauseOfPeevish = cond; y.SolutionForPeevish = cond; markPeevish(snap, id, nowSec);
+        c[cond] = 0;
+        if (!girls.includes(y)) girls.push(y);
+        const sc = peevishScript(id, cond, def, fmLevel(id, Number(y.Familiarity) || 0)); if (sc) scripts.push(sc);
       }
     }
   }
-  return out;
+  return { girls, scripts };
+}
+
+/** 이전 이름 (원인 12 만 보던 판): 동승 레이스 승리로 본다 */
+export function ridePeevish(snap: any, passengerId: number, gdef: (id: number) => any, nowSec = Date.now() / 1000): any[] {
+  return racePeevish(snap, passengerId, true, gdef, () => -1, nowSec).girls;
 }
