@@ -128,7 +128,10 @@ register('MsgSetCurrentCarReq', (body, ctx): Msg[] => {
 //   실기록 2026-11-03 (TOFU++ 10604 ★4, 178/178): 요청 ExpansionCash 28 인데 부품 206 -> 170 (36 소모), MasteryCapacity 178 -> 306 (Expansion 128).
 //   즉 실제 비용은 서버가 정한다. 비용 = cars.json ExpCash (★2 10602 28, ★4 10604 36, ★5 11705 53 = 실기록 2026-11-08 부품 199 -> 146).
 //   실측 2026-11-08 ★5 11705 (Lv3, 268/268): MasteryCapacity 268 -> 415 (Expansion 147), 캐시 그대로.
-//   여러 번 가능 (cars.json ExpCount, 11705 = 6). 두 번째부터 비용 = ExpCash + ExpCashDiff x ExpansionLevel 은 추정 (기록 없음).
+//   여러 번 가능 (cars.json ExpCount, 11705 = 6). 비용 = ExpCash + ExpCashDiff x ExpansionLevel.
+//   실측 2026-11-11 ★5 11705 두 번째 (Lv10, 415/415, ExpansionLevel 1): 요청 ExpansionCash 64 -> Result 1, 부품 65 -> 1 (64 = 53 + 11 x 1),
+//   MasteryCapacity 415 -> 562, ExpansionLevel 2, 캐시 그대로. 클라이언트 비용 함수도 같은 식이며, MasteryCapacity 가 기본값
+//   (SoftLimit + Expansion x 단계)보다 크면 비용을 남은 비율만큼 줄인다 (그 경우는 기록 없음, 서버는 반영 안 함).
 //   차량 레벨 조건 없음: 11705 는 Lv3 에서 됐다.
 register('MsgMasteryExpandReq', (body, ctx): Msg[] => {
   const snap = ctx.store.getUser(ctx.session.accountId);
