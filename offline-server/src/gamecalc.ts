@@ -152,10 +152,18 @@ export function makeOpponent(difficulty: number, cartype?: number): any {
   return {
     Carid: 0, Cartype: type, ItemInfo: [], UpgradeLevel: 1, SlotNum: 1, Mastery: 0, Price: Number(d.SellPrice) || 100,
     Attributes, MasteryCapacity: Number(d.SoftLimit) || 40, MasteryAttr: { AttribMaxSpd: 0, AttribAcc: 0, AttribStability: 0, AttribDrift: 0 },
-    FuelConsume: 20, FuelConsume20404: 13, NthGeneration: 1, IsExhibited: false, ColorTable: d.ColorTable, ColorIndex: Number(d.ColorIndex) || 1,
+    ...carFuel(Number(d.Grade) || 1), NthGeneration: 1, IsExhibited: false, ColorTable: d.ColorTable, ColorIndex: Number(d.ColorIndex) || 1,
     DecalIndex: -1, PlateName: '', CoatingSkill: 0, CoatingValue: 0, CoatingCount: 0, CoatingTime: 0, CoatingCoin: 8000,
     Grade: Number(d.Grade) || 1, CarName: '', IsLocked: false, ExpansionLevel: 0, CarExp: 0,
   };
+}
+
+/** 차량 연료 소모: 15 + 5 x cars.json 기본 등급, FuelConsume20404 = floor(x 2/3).
+ *  실기록 전체(2026-11-11 집계): 기본 ★1 20/13 · ★2 25/16 · ★3 30/20 · ★4 35/23 · ★5 40/26 · ★6 45/30.
+ *  한계 돌파로 Grade 가 올라도 연료는 기본 등급 기준 (10201·10401 Grade 2 인데 20/13). 14-15 첫 보상 10303 = 30/20. */
+export function carFuel(baseGrade: number): { FuelConsume: number; FuelConsume20404: number } {
+  const fc = 15 + 5 * Math.max(1, Math.min(6, Number(baseGrade) || 1));
+  return { FuelConsume: fc, FuelConsume20404: Math.floor((fc * 2) / 3) };
 }
 
 /** 보유 차량 레코드 신규 생성 (cars.json 정의 기준, 형식은 실기록 RewardInfo.CarInfo) */
@@ -167,7 +175,7 @@ export function newOwnedCar(snap: any, cartype: number): any {
     Carid: carid, Cartype: cartype, ItemInfo: [], UpgradeLevel: 1, SlotNum: Number(d.SlotInit) || 1, Mastery: 0,
     Price: Number(d.SellPrice) || 100, Attributes: { ...(d.Attributes ?? {}) }, MasteryCapacity: Number(d.SoftLimit) || 40,
     MasteryAttr: { AttribMaxSpd: 0, AttribAcc: 0, AttribStability: 0, AttribDrift: 0 },
-    FuelConsume: grade >= 2 ? 25 : 20, FuelConsume20404: grade >= 2 ? 16 : 13, NthGeneration: 1, IsExhibited: false,
+    ...carFuel(grade), NthGeneration: 1, IsExhibited: false,
     ColorTable: d.ColorTable, ColorIndex: Number(d.ColorIndex) || 1, DecalIndex: -1, PlateName: '',
     CoatingSkill: 0, CoatingValue: 0, CoatingCount: 0, CoatingTime: 0, CoatingCoin: 8000,
     Grade: grade, CarName: carName(cartype), IsLocked: false, ExpansionLevel: 0, CarExp: 0,
