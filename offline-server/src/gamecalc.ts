@@ -36,9 +36,23 @@ export const areaRace = (zoneId: number, raceIndex: number) =>
 
 export const ATTRS = ['AttribMaxSpd', 'AttribAcc', 'AttribStability', 'AttribDrift'] as const;
 
-/** 친밀도 단계 1..4: girlTable FamiliaritySection1..3 누적 (400 / +230 / +1300). 기록 0->1, 440->2, 630->3. */
-export function famLevel(girlId: number, fam: number): number {
-  const d = girlDef(girlId) ?? {};
+/** 현재 등급의 캐릭터 표 행. 한계 돌파로 Rarity 가 기본 행보다 높으면 girlTable Id = (TransGirlid || Girlid) x 10 + Rarity 행
+ *  (예 20302 Rarity 2 -> 203022: FamiliaritySection 789/4263/947, 기본 행 500/2700/600). 그 행이 없으면 기본 행.
+ *  실기록 근거: 20302 Rarity 2 호감도 958~4412 에서 NextCoin 400 (= 단계 2) -> 기본 행 경계(3200)가 아니라 203022 경계(5052). */
+export function girlRow(girlId: number, rarity?: number, transId?: number): any {
+  const id = Number(transId) > 0 ? Number(transId) : Number(girlId);
+  const base = girlDef(id);
+  const r = Number(rarity) || 0;
+  if (!base || !r || r === Number(base.Rarity)) return base;
+  return girlDef(id * 10 + r) ?? base;
+}
+/** 내 캐릭터 레코드(MyGirlInfo)의 현재 등급 행 */
+export const myGirlRow = (g: any) => girlRow(Number(g?.Girlid), Number(g?.Rarity) || 0, Number(g?.TransGirlid) || 0);
+
+/** 친밀도 단계 1..4: 현재 등급 행의 FamiliaritySection1..3 누적 (기본값 400 / +230 / +1300). 기록 0->1, 440->2, 630->3.
+ *  rarity 를 주면 한계 돌파 행(girlRow)을 쓴다. */
+export function famLevel(girlId: number, fam: number, rarity?: number): number {
+  const d = girlRow(girlId, rarity) ?? {};
   let edge = 0, lv = 1;
   for (const s of [d.FamiliaritySection1 ?? 400, d.FamiliaritySection2 ?? 230, d.FamiliaritySection3 ?? 1300]) {
     edge += Number(s);
@@ -46,13 +60,21 @@ export function famLevel(girlId: number, fam: number): number {
   }
   return Math.min(lv, 4);
 }
+/** 내 캐릭터 레코드의 친밀도 단계 (현재 Rarity 행 기준) */
+export const girlFamLevel = (g: any) => famLevel(Number(g?.Girlid), Number(g?.Familiarity) || 0, Number(g?.Rarity) || 0);
+/** 호감도 최대치 = 현재 등급 행 FamiliaritySection1~3 합 (예 20208: 700+1400+3400 = 5500). 한계 돌파 행 사용은 추정. */
+export function girlFamMax(girlId: number, rarity?: number): number {
+  const d = girlRow(girlId, rarity) ?? {};
+  return (Number(d.FamiliaritySection1) || 0) + (Number(d.FamiliaritySection2) || 0) + (Number(d.FamiliaritySection3) || 0);
+}
 
-/** 캐릭터 NextCoin = 100 x (친밀도 단계 + Rarity - 1). 실기록: Rarity 1 단계 1 -> 100, 2 -> 200, 3 -> 300,
- *  Rarity 2 (20104) 단계 1 -> 200. 친밀도가 바뀔 때마다 맞춘다. */
+/** 캐릭터 NextCoin = 100 x Rarity x 친밀도 단계 (현재 등급 행). 실기록 2026-11-12 집계: 서로 다른 (캐릭터, Rarity, 호감도, NextCoin)
+ *  2,019건 모두 일치 (예 20201 Rarity 5 단계 4 -> 2000, 20505 Rarity 4 -> 400/800/1200/1600, 20302 Rarity 2 호감도 4212 -> 400).
+ *  예전 식 100 x (단계 + Rarity - 1) 은 369건만 맞았다. 친밀도가 바뀔 때마다 맞춘다. */
 export function syncGirl(g: any) {
   if (!g || !g.Girlid) return;
   const rarity = Number(g.Rarity) || Number(girlDef(Number(g.Girlid))?.Rarity) || 1;
-  g.NextCoin = 100 * (famLevel(Number(g.Girlid), Number(g.Familiarity) || 0) + rarity - 1);
+  g.NextCoin = 100 * rarity * famLevel(Number(g.Girlid), Number(g.Familiarity) || 0, rarity);
 }
 
 /** 탑승 캐릭터 능력치 보너스 (클라이언트 passengerBonus / GetPassengerNormalBonusAvailable).
@@ -62,12 +84,16 @@ export function passengerBonus(snap: any, car: any): Record<string, number> {
   const out: Record<string, number> = { AttribMaxSpd: 0, AttribAcc: 0, AttribStability: 0, AttribDrift: 0 };
   const gid = Number(snap.UserInfo?.PassengerGirl);
   const g = (snap.MyGirls?.MyGirlInfo ?? []).find((x: any) => Number(x.Girlid) === gid);
-  const d = girlDef(gid);
-  if (!g || !d || !car) return out;
-  const lv = famLevel(gid, Number(g.Familiarity) || 0);
-  if (lv < 2 || g.Emotion === 1 || g.Emotion === 2) return out;
+  const row0 = girlDef(Number(g?.TransGirlid) > 0 ? Number(g.TransGirlid) : gid);
+  if (!g || !row0 || !car) return out;
+  // 클라이언트 GetPassengerNormalBonusAvailable / GetPassengerBonus: 한계 돌파한 캐릭터(Rarity > 기본 행 Rarity)는 단계 1 이어도 보너스,
+  //   등급 비교는 기본 행 Rarity <= 차량 Grade, 보너스 값은 max(기본 Rarity, 현재 Rarity) 등급 행의 Attr0..3.
+  const lv = girlFamLevel(g);
+  const expanded = (Number(g.Rarity) || 0) > Number(row0.Rarity);
+  if ((!expanded && lv < 2) || g.Emotion === 1 || g.Emotion === 2) return out;
   const carGrade = Number(car.Grade) || Number(carDefOf(car.Cartype)?.Grade) || 1;
-  if (Number(d.Rarity) > carGrade) return out;
+  if (Number(row0.Rarity) > carGrade) return out;
+  const d = girlRow(gid, Math.max(Number(row0.Rarity) || 0, Number(g.Rarity) || 0), Number(g.TransGirlid) || 0) ?? row0;
   const bias = m().attr.get(Number(d.AttrBias))?.AttrBias;
   if (!bias) return out;
   const base = [0, d.Attr0, d.Attr1, d.Attr2, d.Attr3][lv] || 0;
@@ -79,7 +105,7 @@ export function passengerBonus(snap: any, car: any): Record<string, number> {
 
 /** 레이스 시작 응답의 MyCarInfo.FinalAttr = 차량 + 숙련도 + 장착 부품 + CarEffect + 탑승 캐릭터 보너스
  *  (클라이언트 GetCarTotalAttribute. 2026-11-01 실기록 2-12: {147,148,175,155} 정확히 일치) */
-export function finalAttr(snap: any, car: any): Record<string, number> {
+export function finalAttr(snap: any, car: any, opts: { room?: boolean } = {}): Record<string, number> {
   const out: Record<string, number> = { AttribMaxSpd: 0, AttribAcc: 0, AttribStability: 0, AttribDrift: 0 };
   const add = (a: any) => { if (a) for (const k of ATTRS) out[k] += Number(a[k]) || 0; };
   add(car.Attributes); add(car.MasteryAttr);
@@ -91,7 +117,22 @@ export function finalAttr(snap: any, car: any): Record<string, number> {
   }
   for (const e of car.CarEffect ?? []) add(e.EAttr);
   add(passengerBonus(snap, car));
+  const room = opts.room ? girlRoomBonus(snap) : 0;
+  if (room) for (const k of ATTRS) out[k] += room;
   return out;
+}
+
+/** 탑승 캐릭터 방 보너스: 탑승 캐릭터에게 TrueHeroineRoom 기억(girlMemoryTable 3019 등)이 있으면 네 능력치 모두 + vconst girlRoomBonus (32).
+ *  실기록 2026-11-12 레이스 시작 재생: 20202 (방 있음, 한계 돌파 아님) 8/8건, 20302 (방 있음, 돌파) 33/33건이 네 능력치 모두 정확히 +32 모자랐고,
+ *  방 없는 20201 은 일치. 주간 레이스(RaceType 3) 시작 1건은 +32 없이 일치 -> 스토리 레이스(battle.ts)만 opts.room.
+ *  이벤트·월드 투어·대전 레이스와, 탑승 보너스가 꺼진 조건(단계·기분)에서도 붙는지는 미확인. */
+export function girlRoomBonus(snap: any): number {
+  const gid = Number(snap?.UserInfo?.PassengerGirl);
+  if (!(gid > 0)) return 0;
+  const mem = (snap.GirlMemorySet?.GirlMemory ?? []).find((x: any) => Number(x.Girlid) === gid)?.Memory ?? [];
+  if (!mem.some((m: any) => m.MemoryName === 'TrueHeroineRoom')) return 0;
+  const v = (table('vconstTable.json')?.Vconst ?? []).find((x: any) => x.Name === 'girlRoomBonus');
+  return Number(v?.Dval) || 0;
 }
 
 /** 부품 세트 효과 -> car.CarEffect (EType 4). 실데이터 2026-11-05 10604 (세트 3 부품 37201·37204·37202 장착):

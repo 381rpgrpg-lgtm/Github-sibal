@@ -122,13 +122,13 @@ register('MsgUpdateMyGirlInfoReq', (body, ctx): Msg[] => {
 //   공통 1 호감도 단계 4, 공통 2 Emotion 3, 공통 3 '수영복 선물' = 첫 수영복(girlItemTable 같은 캐릭터·Slot 10·SellPrice<0·Id%100==11) 보유
 //     (기록: 수영복 없을 때 나머지 조건이 다 맞아도 Result 2, 백화점에서 수영복을 산 뒤 Result 1),
 //   추가 = girlTable SGirlExpansionCritSet[TargetRarity = Rarity+1].SGirlExpansionCrit 각각 CurrentValue >= Param1, 코인 >= ExpansionCoin.
-// 성공: 코인 -ExpansionCoin, Rarity +1, Familiarity 0, NextCoin = 100 x (단계 + Rarity - 1) (기록 200),
+// 성공: 코인 -ExpansionCoin, Rarity +1, Familiarity 0, NextCoin = 100 x Rarity x 단계 (기록 200 = Rarity 2 단계 1),
 //   GirlInfo.GirlExpansionCritInfo = 다음 단계 조건 진행값, GirlRarityExpandId 에서 제거, 퀘스트 Type 7 [1, 캐릭터, 목표 등급] 갱신.
 // 진행값: 기록상 Param1 에서 잘린다 (데이트 21회인데 6/6, 다음 단계 별점 28/28·승리 24/24·연락처 4/4).
 //   실서버 누적 카운터라 정확한 식은 없다. 추정: 저장된 값(GirlExpansionCritInfo)이 있으면 그 값, 없으면
 //   1 데이트 수 = NthDate, 2 데이트 별점 합 = DatingState MaxRecord 합, 13 에피소드 = 보스(RaceIndex 20) 이긴 가장 높은 구역,
 //   14·16 레이스 승리·진행 = 이긴 레이스 수(하한), 17 연락처 = 열린 캐릭터 수 - 1, 그 외 0. 모두 Param1 에서 자른다.
-import { famLevel, syncGirl, table } from '../gamecalc.js';
+import { girlFamLevel, girlFamMax, syncGirl, table } from '../gamecalc.js';
 import { refreshQuests } from '../quests.js';
 
 const myOpenGirl = (snap: any, id: number) => (snap?.MyGirls?.MyGirlInfo ?? []).find((x: any) => Number(x.Girlid) === id && Number(x.State) === GIRL_OPEN);
@@ -157,7 +157,7 @@ export function expansionReady(snap: any, g: any): boolean {
   const set = critSet(id, (Number(g?.Rarity) || 1) + 1);
   const swim = firstSwimsuit(id);
   if (!set || swim === undefined) return false;
-  return famLevel(id, Number(g.Familiarity) || 0) >= 4 && Number(g.Emotion) === 3
+  return girlFamLevel(g) >= 4 && Number(g.Emotion) === 3
     && (snap.GirlItems?.GirlItemInfo ?? []).some((x: any) => Number(x.ItemType) === Number(swim))
     && critProgress(snap, g, set).every((c, i) => c.CurrentValue >= Number(set.SGirlExpansionCrit[i].Param1));
 }
@@ -204,7 +204,7 @@ register('MsgGirlRarityExpandReq', (body, ctx): Msg[] => {
   const set = critSet(id, rarity + 1);
   const swim = firstSwimsuit(id);
   const crits = critProgress(snap, g, set);
-  const ok = !!set && famLevel(id, Number(g.Familiarity) || 0) >= 4 && Number(g.Emotion) === 3
+  const ok = !!set && girlFamLevel(g) >= 4 && Number(g.Emotion) === 3
     && swim !== undefined && (snap.GirlItems?.GirlItemInfo ?? []).some((x: any) => Number(x.ItemType) === Number(swim))
     && crits.every((c, i) => c.CurrentValue >= Number(set.SGirlExpansionCrit[i].Param1))
     && (Number(ui.Coin) || 0) >= (Number(set.ExpansionCoin) || 0);
@@ -232,23 +232,19 @@ register('MsgGirlRarityExpandReq', (body, ctx): Msg[] => {
 //   클라이언트 안내 boost_fm_desc '앞으로 N회의 데이트만 실행하면 호감도가 최대치' (N = BoostFamiliarity 길이 + 1).
 //   추정: 이미 부스트 중이거나 최대치면 Result 2, 캐시 부족 Result 7, 백화점 선물 조건(boost_fm_need_give_gift)은 기록이 없어 검사하지 않는다.
 const FM_BOOST_CASH = 50, FM_BOOST_DATES = 3;
-function fmMax(id: number): number {
-  const d: any = (table('girlTable.json')?.Girl ?? []).find((x: any) => Number(x.Id) === id) ?? {};
-  return (Number(d.FamiliaritySection1) || 0) + (Number(d.FamiliaritySection2) || 0) + (Number(d.FamiliaritySection3) || 0);
-}
 register('MsgFMBoostInfoReq', (body, ctx): Msg[] => {
   const snap = ctx.store.getUser(ctx.session.accountId);
   const g = (snap?.MyGirls?.MyGirlInfo ?? []).find((x: any) => Number(x.Girlid) === Number(body?.GirlInfo?.Girlid));
   if (!snap || !g) return [{ name: 'MsgFMBoostInfoAns', body: { Seq: 1, Result: 2 } }];
   const active = g.FmBoost && Number(g.FmBoost.FmBoostStartRarity) === Number(g.Rarity);
-  const full = (Number(g.Familiarity) || 0) >= fmMax(Number(g.Girlid));
+  const full = (Number(g.Familiarity) || 0) >= girlFamMax(Number(g.Girlid), Number(g.Rarity) || 0);
   return [{ name: 'MsgFMBoostInfoAns', body: { Seq: 1, Result: active || full ? 2 : 1, GirlInfo: g, NeedCash: FM_BOOST_CASH, DateCount: FM_BOOST_DATES } }];
 });
 register('MsgFMBoostReq', (body, ctx): Msg[] => {
   const snap = ctx.store.getUser(ctx.session.accountId);
   const g = (snap?.MyGirls?.MyGirlInfo ?? []).find((x: any) => Number(x.Girlid) === Number(body?.GirlInfo?.Girlid));
   if (!snap || !g) return [{ name: 'MsgFMBoostAns', body: { Seq: 1, Result: 2 } }];
-  const ui = snap.UserInfo, id = Number(g.Girlid), cur = Number(g.Familiarity) || 0, max = fmMax(id);
+  const ui = snap.UserInfo, id = Number(g.Girlid), cur = Number(g.Familiarity) || 0, max = girlFamMax(id, Number(g.Rarity) || 0);
   if ((g.FmBoost && Number(g.FmBoost.FmBoostStartRarity) === Number(g.Rarity)) || cur >= max) return [{ name: 'MsgFMBoostAns', body: { Seq: 1, Result: 2, UserInfo: ui, GirlInfo: g } }];
   if ((Number(ui.Cash) || 0) < FM_BOOST_CASH) return [{ name: 'MsgFMBoostAns', body: { Seq: 1, Result: 7, UserInfo: ui, GirlInfo: g } }];
   ui.Cash = Number(ui.Cash) - FM_BOOST_CASH;

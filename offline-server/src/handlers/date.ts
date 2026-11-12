@@ -33,7 +33,7 @@ const DATA = new URL('../../data/', import.meta.url).pathname;
 const TUT_DATE = 1024;
 const MULT: Record<number, number> = { 1: 0.5, 2: 0.75, 3: 1, 4: 1.25, 5: 1.5 };
 // 첫 장소 보너스: girlTable FirstDatePlaceBonus (20105·20101·20102 = 112, 20207 = 103). 실기록 두 건 모두 그 장소 첫 데이트.
-import { girlDef as gdef, table, syncGirl } from '../gamecalc.js';
+import { girlDef as gdef, table, syncGirl, famLevel as calcFamLevel, girlFamMax, myGirlRow } from '../gamecalc.js';
 // 쿨타임: girlTable DateCoolTime(분, 20105 = 0.5 -> 30초). 쿨타임 중에는 클라이언트가 캐시 초기화 화면만 띄우고
 //   신청을 보내지 않는다 (사용자 확인 2026-11-02). 캐시 초기화 요청은 캐시 소비라 기록하지 않았다 -> 미구현.
 const COOLTIME_SEC = 30;
@@ -92,14 +92,19 @@ const scriptRows = (girl: number, name: string, lv: number): Row[] => {
 };
 const chunk = (girl: number, name: string, lv: number, ins: any[]) => ({ Id: girl, ScriptName: name, FamiliarityLv: lv, Instruction: ins });
 
+// 친밀도 단계: 현재 Rarity 행 기준 (gamecalc famLevel / girlRow: 한계 돌파 캐릭터는 Id x 10 + Rarity 행)
 function famLevel(g: any, fam: number): number {
-  const d = girls!.get(Number(g.Girlid)) ?? {};
-  let edge = 0, lv = 1;
-  for (const s of [d.FamiliaritySection1 ?? 400, d.FamiliaritySection2 ?? 230, d.FamiliaritySection3 ?? 1300]) {
-    edge += Number(s);
-    if (fam >= edge) lv++; else break;
-  }
-  return Math.min(lv, 4);
+  return calcFamLevel(Number(g.Girlid), fam, Number(g.Rarity) || 0);
+}
+// 대본 단계 (클라이언트 GetFamiliarityLevelForScript): 한계 돌파한 캐릭터(Rarity > 기본 행 Rarity)는 5, 최고 등급(vconst GirlRarityMax 6)이면 6,
+//   아니면 친밀도 단계. 실기록 2026-11-12 집계: 한계 돌파 뒤 데이트 대본 덩어리 64개 모두 FamiliarityLv 5 (20102·20105·20302), 돌파 전은 1~4.
+//   기억 FmFlag 비트도 이 단계 (실기록 20302 돌파 뒤 첫 데이트: 장소 기억 2 -> 18 = 단계 2 비트 | 단계 5 비트).
+const RARITY_MAX = 6;
+function scriptLv(g: any, flv: number): number {
+  const base = girls!.get(Number(g.TransGirlid) > 0 ? Number(g.TransGirlid) : Number(g.Girlid)) ?? gdef(Number(g.Girlid));
+  const r = Number(g.Rarity) || 0;
+  if (base && r > Number(base.Rarity)) return r >= RARITY_MAX ? 6 : 5;
+  return flv;
 }
 
 // 장소 대본 (CHANGE 의 ND 를 장소 Id 로, 장소 AmbiSound 를 5번째 인자로)
@@ -121,8 +126,11 @@ function tagsLike(re: RegExp): string[] {
   for (const t of texts!) { const m = re.exec(t); if (m) out.push([Number(m[1]), t]); }
   return out.sort((a, b) => a[0] - b[0]).map((x) => x[1]);
 }
+// 문항 단계: 대본 단계 그대로, 단 한계 돌파 캐릭터(대본 단계 5·6)는 Stage1 문항·S{n}_ANS_{a}1 답 대사
+//   (실기록 2026-11-12: 20102·20302 돌파 뒤 문항 데이트 7건 모두 Stage1, 답 '20102Date_ParkS1_ANS_11SCRIPT8').
+const qLv = (lv: number) => (lv >= 5 ? 1 : lv);
 function questionIns(girl: number, sname: string, lv: number, v: number, index: number) {
-  const base = `${girl}${sname}Stage${lv}`;
+  const base = `${girl}${sname}Stage${qLv(lv)}`;
   const q = tagsLike(new RegExp(`^${base}SCRIPT(\\d+)$`))[v - 1];
   const o1 = tagsLike(new RegExp(`^${base}1OPT(\\d+)$`))[v - 1];
   const o2 = tagsLike(new RegExp(`^${base}2OPT(\\d+)$`))[v - 1];
@@ -130,7 +138,7 @@ function questionIns(girl: number, sname: string, lv: number, v: number, index: 
   return [{ Function: 'SCRIPT', TextTag: q }, { Function: 'SEL_START' }, { Function: 'OPT', TextTag: o1 }, { Function: 'OPT', TextTag: o2 }, { Function: 'SEL_END', Index: index }];
 }
 const answerTag = (girl: number, sname: string, lv: number, v: number, a: number) =>
-  tagsLike(new RegExp(`^${girl}${sname}S${v}_ANS_${a}${lv}SCRIPT(\\d+)$`))[0];
+  tagsLike(new RegExp(`^${girl}${sname}S${v}_ANS_${a}${qLv(lv)}SCRIPT(\\d+)$`))[0];
 
 function chatChunk(girl: number, lv: number, fam: number, tutorial: boolean, qIndex: number) {
   const d = girls!.get(girl) ?? {};
@@ -147,8 +155,13 @@ function chatChunk(girl: number, lv: number, fam: number, tutorial: boolean, qIn
 
 // 문항 뒤(또는 문항 없는 장소에서 시작 때) 붙는 사건. 실기록 2026-11-02: Date_Event_Chat_A(문항 있음), Date_Event_Chat_B(20105 단계 3, 문항 없음),
 //   Date_Event_Hint(문항 없음), Date_Event_Gift(GIFT 행에 Index 5 -> Depth 1 Index 5 요청에 GiftFromGirl). 고르는 규칙은 추정: 조건 맞는 채팅 + Hint + Gift 중 균등.
+// 데이트 사건(채팅·힌트·선물) 빈도. 실기록 2026-11-12 집계: 문항 없는 장소 시작 응답 단계 1~4 = 73/235 (.31),
+//   문항 장소 마지막 답 뒤 (백화점 Shopping 제외) = 54/157 (.34) -> 1/3 로 둔다 (단계별 차이 .22~.53 은 표본이 작아 무시, 결정 규칙 미확인).
+//   한계 돌파 캐릭터(대본 단계 5·6)는 0/28 (시작 23 + 마지막 답 뒤 5) -> 사건 없음.
+const EVENT_RATE = 1 / 3;
 function eventChunk(girl: number, lv: number, fam: number, tutorial: boolean, qIndex: number) {
   if (tutorial) { const c = chatChunk(girl, lv, fam, true, qIndex); return c ? { ...c, ask: true } : null; }
+  if (lv >= 5 || Math.random() >= EVENT_RATE) return null;
   const d = girls!.get(girl) ?? {};
   const pool = ['A', 'B', 'C', 'D', 'E'].filter((L) => d[`ChatCondition${L}`] !== undefined && fam >= Number(d[`ChatCondition${L}`]))
     .map((L) => `Date_Event_Chat_${L}`).concat(['Date_Event_Hint', 'Date_Event_Gift'])
@@ -164,10 +177,9 @@ function eventChunk(girl: number, lv: number, fam: number, tutorial: boolean, qI
 const hasQuestions = (girl: number, sname: string, lv: number) => questionIns(girl, sname, lv, 1, 1).length > 0;
 /** 장소 선호 (girlTable PreferencePlaceA / DislikePlace). 실기록: 20105 영화관 = 선호 -> 시작 대본 CHANGE 뒤 DATE_NOTICE date_notice_7
  *  ['1.5','2'] + Date_Event_Preference_A 덩어리. 싫어하는 장소는 date_notice_9 + Date_Event_Npreferred (추정: 기록 없음) */
-/** 호감도 최대치 = girlTable FamiliaritySection1~3 합 (예 20208: 700+1400+3400 = 5500) */
-export function famMax(girl: number): number {
-  const d = girls!.get(girl) ?? gdef(girl) ?? {};
-  return (Number(d.FamiliaritySection1) || 0) + (Number(d.FamiliaritySection2) || 0) + (Number(d.FamiliaritySection3) || 0);
+/** 호감도 최대치 = 현재 등급 행 FamiliaritySection1~3 합 (예 20208: 700+1400+3400 = 5500) */
+export function famMax(girl: number, rarity?: number): number {
+  return girlFamMax(girl, rarity);
 }
 
 function placeMood(girl: number, placeId: number, lastPlace = 0): { notice: any; event: string } | null {
@@ -182,9 +194,9 @@ function placeMood(girl: number, placeId: number, lastPlace = 0): { notice: any;
   return null;
 }
 
-interface DateState { girl: number; place: number; lv: number; tutorial: boolean; likes: number; dislikes: number; peevish?: boolean;
+interface DateState { girl: number; place: number; lv: number; flv?: number; tutorial: boolean; likes: number; dislikes: number; peevish?: boolean;
   chat: string | null; chatSat: number; resultIndex: number; finalIndex: number; satisfaction?: number; end?: string;
-  events?: string[]; gift?: boolean; refused?: boolean;
+  events?: string[]; gift?: boolean; refused?: boolean; noq?: boolean;
   dept?: { scripts: string[]; gift?: { index: number; count: number; delta: number } } }
 const key = (ctx: Ctx) => `date:${ctx.session.accountId}`;
 const getState = (ctx: Ctx): DateState | null => { const s = ctx.store.getMeta(key(ctx)); return s ? JSON.parse(s) : null; };
@@ -196,12 +208,15 @@ register('MsgDateProposeReq', (body, ctx): Msg[] => {
   const g = snap && myGirl(snap, body?.GirlInfo?.Girlid);
   if (!g) return [{ name: 'MsgDateProposeAns', body: { Seq: 1, Result: 2 } }];
   // 차량 반응 (실기록: ★2 차량 10602 + 20105(Rarity 1) -> Car_Reaction_Good + DATE_NOTICE date_notice_3 ['1.5','2'],
-  //   ★1 차량 + Rarity 1 -> 없음. 추정: 차량 등급 > Rarity 면 Good, < 면 Bad(date_notice_4), 같으면 없음)
+  //   ★1 차량 + Rarity 1 -> 없음.
+  //   실기록 2026-11-12 집계 (데이트 제안 성공 응답): 대본 단계 2·3 에서만 반응 (단계 2: 146/161, 단계 3: 118/118),
+  //   단계 1 (행 없음) 72건·단계 4 107건·한계 돌파(대본 단계 5) 32건은 한 번도 없음. 차량 등급 = Rarity 여도 Good (★5 + Rarity 5: 28건).
+  //   단계 2 에서 반응이 없던 15건의 이유는 미확인. 차량 등급 < Rarity 면 Bad(date_notice_4) 는 추정 (기록 없음).
   init();
-  const girl = Number(g.Girlid), lv = famLevel(g, Number(g.Familiarity) || 0);
+  const girl = Number(g.Girlid), lv = scriptLv(g, famLevel(g, Number(g.Familiarity) || 0));
   const car = (snap.Cars?.CarInfo ?? []).find((c: any) => Number(c.Carid) === Number(snap.UserInfo?.Currentcar));
   const grade = Number(car?.Grade) || 1, rarity = Number(g.Rarity) || Number(girls!.get(girl)?.Rarity) || 1;
-  const react = grade > rarity ? 'Car_Reaction_Good' : grade < rarity ? 'Car_Reaction_Bad' : null;
+  const react = lv === 2 || lv === 3 ? (grade >= rarity ? 'Car_Reaction_Good' : 'Car_Reaction_Bad') : null;
   const rs = react ? scriptRows(girl, react, lv) : [];
   const script = rs.length ? { Chunk: [chunk(girl, react!, lv, rs.flatMap((r, i) => {
     const o = toIns(r);
@@ -236,8 +251,9 @@ register('MsgDateStartReq', (body, ctx): Msg[] => {
   const place = places!.get(Number(body?.DatePlace));
   if (!place) return fail(`장소 데이트가 아님 (DateType ${body?.DateType ?? '-'}: 백화점 등은 실서버 기록이 더 필요해 미구현)`);
   const ui = snap.UserInfo;
-  const girl = Number(g.Girlid), lv = famLevel(g, Number(g.Familiarity) || 0);
-  if (lv < (Number(place.UnlockFmLevel) || 1)) return fail(`호감도 단계 부족 (${lv} < ${place.UnlockFmLevel})`); // 추정: 거절 코드 미확인
+  const girl = Number(g.Girlid), flv = famLevel(g, Number(g.Familiarity) || 0), lv = scriptLv(g, flv);
+  // 장소 UnlockFmLevel 은 서버가 막지 않는다 (실기록 2026-11-12: 친밀도 단계 < UnlockFmLevel 인 데이트 시작 15건 모두 Result 1,
+  //   한계 돌파 캐릭터 포함). 예전 '호감도 단계 부족' 거절은 추정이었고 틀렸다.
   // 장소 비용 = 표 Price x 희귀도 배율(1성 1, 2성 1.5, 3성 2)을 100 단위 반올림 (실기록 2026-11-06, 4명 11개 장소 15건 모두 일치:
   //   20402·20202(3성) 바 1200 -> 2400, 카페 375 -> 800, 20303(2성) 노래방 1400 -> 2100, 20302(1성) 42071 350 -> 400)
   const rarity = Number(g.Rarity) || Number(gdef(girl)?.Rarity) || 1;
@@ -281,7 +297,7 @@ register('MsgDateStartReq', (body, ctx): Msg[] => {
     chunks.push(chunk(girl, place.ScriptName, lv, ins));
     chunks.push(chunk(girl, 'Date_End_Basic', lv, scriptRows(girl, 'Date_End_Basic', lv).map((r) => toIns(r))));
     chunks.push(chunk(girl, place.ScriptName, lv, [{ Index: 2 }, { Index: 3 }]));
-    st = { girl, place: place.Id, lv, tutorial, likes: 0, dislikes: 0, chat: null, chatSat: 0, resultIndex: 1, finalIndex: 3, end: 'Date_End_Basic', events: [], refused: true } as DateState;
+    st = { girl, place: place.Id, lv, flv, tutorial, likes: 0, dislikes: 0, chat: null, chatSat: 0, resultIndex: 1, finalIndex: 3, end: 'Date_End_Basic', events: [], refused: true } as DateState;
   } else if (!tutorial && Number(g.Emotion) === 1 && scriptRows(girl, 'Date_Peevish', lv).length) {
     // 삐친 캐릭터와의 데이트 (실기록 2026-11-05, 20101·20303 원인 11): 대본 [Date_Peevish(CHANGE [장소, 캐릭터, SYSTEM, face_peevish, 장소 소리]),
     //   Date_End_Peevish, {장소 대본 Index 1, Index 2}], 문항 없음. Index 1 -> 만족도 3(싫어하는 장소면 1), Index 2 -> 결과에서 기분 0·원인 0 (풀림)
@@ -295,24 +311,35 @@ register('MsgDateStartReq', (body, ctx): Msg[] => {
     chunks.push(chunk(girl, 'Date_Peevish', lv, scriptRows(girl, 'Date_Peevish', lv).map(fix)));
     chunks.push(chunk(girl, 'Date_End_Peevish', lv, scriptRows(girl, 'Date_End_Peevish', lv).map((r) => toIns(r))));
     chunks.push(chunk(girl, place.ScriptName, lv, [{ Index: 1 }, { Index: 2 }]));
-    st = { girl, place: place.Id, lv, tutorial, likes: 0, dislikes: 0, chat: null, chatSat: 0, resultIndex: 1, finalIndex: 2, end: 'Date_End_Peevish', events: [], peevish: true };
+    st = { girl, place: place.Id, lv, flv, tutorial, likes: 0, dislikes: 0, chat: null, chatSat: 0, resultIndex: 1, finalIndex: 2, end: 'Date_End_Peevish', events: [], peevish: true };
   } else if (tutorial || !hasQuestions(girl, place.ScriptName, lv)) {
     // 문항 없음: 시작, 사건(문항·선물이 있으면 Index 1), 종료, 결과·마침 인덱스
     const ev = eventChunk(girl, lv, Number(g.Familiarity) || 0, tutorial, 1);
     chunks.push(chunk(girl, place.ScriptName, lv, intro));
     if (moodChunk) chunks.push(moodChunk);
     if (ev) { chunks.push(ev.chunk); events.push(ev.name); }
-    chunks.push(chunk(girl, 'Date_End_Basic', lv, scriptRows(girl, 'Date_End_Basic', lv).map((r) => toIns(r))));
+    // 문항 없는 데이트의 종료 대본은 시작 때 정해지고 만족도를 정한다 (실기록 2026-11-12, 사건 없는 167건: Basic -> 만족도 3 107/107,
+    //   Good -> 4 45/45, Bad -> 2 11건·1 4건). 비율은 기분별: 즐거움(3) Good 40 / Bad 9 / Basic 97, 보통(0) Good 4 / Bad 6 / Basic 11.
+    //   무엇이 고르는지는 미확인 (선호 장소·탑승 여부와는 무관) -> 기분별 비율로 뽑는다. 튜토리얼은 Basic.
+    const endPick = (): string => {
+      if (tutorial) return 'Date_End_Basic';
+      const [pg, pb] = Number(g.Emotion) === 0 ? [4 / 21, 6 / 21] : [40 / 146, 9 / 146];
+      const x = Math.random();
+      const e = x < pg ? 'Date_End_Good' : x < pg + pb ? 'Date_End_Bad' : 'Date_End_Basic';
+      return scriptRows(girl, e, lv).length ? e : 'Date_End_Basic';
+    };
+    const endName = endPick();
+    chunks.push(chunk(girl, endName, lv, scriptRows(girl, endName, lv).map((r) => toIns(r))));
     const r = ev?.ask ? 2 : 1;
     chunks.push(chunk(girl, place.ScriptName, lv, [{ Index: r }, { Index: r + 1 }]));
-    st = { girl, place: place.Id, lv, tutorial, likes: 0, dislikes: 0, chat: ev?.ask && !ev.gift ? ev.name : null, chatSat: 0,
-      resultIndex: r, finalIndex: r + 1, end: 'Date_End_Basic', events, gift: !!ev?.gift };
+    st = { girl, place: place.Id, lv, flv, tutorial, likes: 0, dislikes: 0, chat: ev?.ask && !ev.gift ? ev.name : null, chatSat: 0,
+      resultIndex: r, finalIndex: r + 1, end: endName, events, gift: !!ev?.gift, noq: true };
   } else {
     const qs = [...questionIns(girl, place.ScriptName, lv, 1, 1), ...questionIns(girl, place.ScriptName, lv, 2, 2)];
     if (moodChunk) { chunks.push(chunk(girl, place.ScriptName, lv, intro), moodChunk, chunk(girl, place.ScriptName, lv, qs)); }
     else chunks.push(chunk(girl, place.ScriptName, lv, [...intro, ...qs]));
     chunks.push(chunk(girl, place.ScriptName, lv, [{ Index: 3 }, { Index: 4 }]));
-    st = { girl, place: place.Id, lv, tutorial, likes: 0, dislikes: 0, chat: null, chatSat: 0, resultIndex: 3, finalIndex: 4, events };
+    st = { girl, place: place.Id, lv, flv, tutorial, likes: 0, dislikes: 0, chat: null, chatSat: 0, resultIndex: 3, finalIndex: 4, events };
   }
   setState(ctx, st);
   ctx.store.putUser(ctx.session.accountId, snap);
@@ -368,7 +395,7 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
   // 선물 사건 (실기록 20102 단계 1: GiftFromGirl {ItemInfo [{61001, 100, DeltaNum 100}], CarInfo [], GirlItemInfo []} + UserInfo.
   //   추정: 코인 100 x 친밀도 단계)
   if (st.gift && ((depth === 1 && index === 5) || (depth === 0 && index === 1 && st.resultIndex === 2))) {
-    const coin = 100 * st.lv;
+    const coin = 100 * (st.flv ?? st.lv);
     ui.Coin = (Number(ui.Coin) || 0) + coin;
     st.gift = false;
     save();
@@ -389,7 +416,7 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
   // 일반 데이트 문항 1·2
   if (!st.tutorial && st.resultIndex === 3 && depth === 0 && (index === 1 || index === 2)) {
     const ans = Number(body?.AnswerSelect) || 1;
-    const liked = answers[`${st.girl}|${place.ScriptName}|${st.lv}|${index}`] ?? 1;
+    const liked = answers[`${st.girl}|${place.ScriptName}|${qLv(st.lv)}|${index}`] ?? 1;
     const good = ans === liked;
     if (good) st.likes++; else st.dislikes++;
     const resChunk = chunk(st.girl, place.ScriptName, st.lv, [
@@ -416,18 +443,24 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
     // 싫어하는 장소(girlTable DislikePlace)는 -2: 20101 의 대학(42071) 데이트 — 문항 없는 2건 1, 삐친 상태 데이트 1. 같은 삐친 데이트라도
     //   20303 노래방(보통 장소)은 3 (2026-11-05). 삐친 데이트는 문항이 없어 3 + 장소 보정. 선호 장소 가산은 미확인
     const placeAdj = Number(gdef(st.girl)?.DislikePlace) === st.place ? -2 : 0;
-    const sat = Math.max(1, Math.min(5, 3 + (st.peevish ? 0 : st.likes - st.dislikes) + placeAdj));
+    const endSat = st.noq ? (st.end === 'Date_End_Good' ? 4 : st.end === 'Date_End_Bad' ? 2 : 3) : 3;
+    const sat = Math.max(1, Math.min(5, endSat + (st.peevish ? 0 : st.likes - st.dislikes) + placeAdj));
     st.satisfaction = sat;
-    let delta = Math.round((Number(place.Familiarity) || 0) * MULT[sat]);
+    // 한계 돌파 캐릭터는 x1.1 (실기록 2026-11-12, 모두 Rarity 2: 20302 165 -> 182, 139 -> 153, 243 x 1.25 -> 334, 20105 48 -> 53).
+    //   Rarity 3 이상에서 1 + 0.1 x (현재 Rarity - 기본 Rarity) 로 늘어나는지는 추정 (기록 없음).
+    const baseR = Number(gdef(st.girl)?.Rarity) || 1, curR = Number(g.Rarity) || baseR;
+    const expMul = curR > baseR ? 1 + 0.1 * (curR - baseR) : 1;
+    let delta = Math.round((Number(place.Familiarity) || 0) * MULT[sat] * expMul);
     const firstAtPlace = !(g.DatingState ?? []).some((x: any) => Number(x.Placeid) === st.place);
-    let bonus = firstAtPlace ? Number(gdef(st.girl)?.FirstDatePlaceBonus) || 0 : 0;
+    // 첫 장소 보너스도 현재 등급 행 값 (한계 돌파 행은 0: 실기록 20302 돌파 뒤 첫 장소 데이트에 보너스 없음)
+    let bonus = firstAtPlace ? Number(myGirlRow(g)?.FirstDatePlaceBonus) || 0 : 0;
     // FM 부스트 (girls.ts MsgFMBoostReq): 남은 목표치(BoostFamiliarity)로 바로 오르고, 목표가 다 쓰였으면 최대치로 간 뒤 부스트 끝.
     //   실기록 2026-11-06 20208: 2987 -> 3825 (목표 [3825, 4662] 의 첫째, DeltaFamiliarity 838), 응답 GirlInfo.FmBoost.BoostFamiliarity [4662]
     const fb = g.FmBoost;
     if (fb && Number(fb.FmBoostStartRarity) === Number(g.Rarity)) {
       const cur = Number(g.Familiarity) || 0;
-      const tgt = Array.isArray(fb.BoostFamiliarity) && fb.BoostFamiliarity.length ? Number(fb.BoostFamiliarity.shift()) : famMax(st.girl);
-      if (!(fb.BoostFamiliarity?.length) && tgt >= famMax(st.girl)) delete g.FmBoost; // 마지막 데이트 뒤 부스트 끝 (추정: 끝난 뒤 필드 삭제)
+      const tgt = Array.isArray(fb.BoostFamiliarity) && fb.BoostFamiliarity.length ? Number(fb.BoostFamiliarity.shift()) : famMax(st.girl, Number(g.Rarity) || 0);
+      if (!(fb.BoostFamiliarity?.length) && tgt >= famMax(st.girl, Number(g.Rarity) || 0)) delete g.FmBoost; // 마지막 데이트 뒤 부스트 끝 (추정: 끝난 뒤 필드 삭제)
       if (tgt > cur + delta + bonus) { delta = tgt - cur; bonus = 0; }
     }
     st.end ??= 'Date_End_Basic';
@@ -449,7 +482,8 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
     // 친밀도 단계 장면: 단계 3 / 최대(4)에 오른 뒤 첫 데이트 결과에 FamiliarityLv3 / FamiliarityLvMax 덩어리
     //   (실기록: 20105 백화점 데이트로 단계 3 도달 -> 다음 경기장 데이트 결과에 FamiliarityLv3, 그다음 영화관 결과에는 없음).
     //   본 적 있는지는 기억(girlMemoryTable FamiliarityLv3) 기록으로 판단. 선물·문항 행이 있는 장면은 건너뜀(추정).
-    const scene = st.lv >= 4 ? 'FamiliarityLvMax' : st.lv >= 3 ? 'FamiliarityLv3' : null;
+    const fl = st.flv ?? st.lv;
+    const scene = st.lv > 4 ? null : fl >= 4 ? 'FamiliarityLvMax' : fl >= 3 ? 'FamiliarityLv3' : null; // 한계 돌파 캐릭터(대본 단계 5·6)는 장면 없음 (추정)
     const seen = (snap.GirlMemorySet?.GirlMemory ?? []).find((x: any) => Number(x.Girlid) === st.girl)?.Memory ?? [];
     const sceneDef = scene && memories!.find((m: any) => Number(m.GirlId) === st.girl && m.Scriptname === scene);
     const sceneRows = scene ? scriptRows(st.girl, scene, st.lv) : [];
@@ -458,7 +492,8 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
     if (showScene) (st.events ??= []).push(scene!);
     save();
     return [{ name: 'MsgScriptProgressAns', body: { ...head, UserInfo: uiOut, DeltaInfo: { Charexp: xp },
-      GirlInfo: { ...g, DeltaFamiliarity: delta, BonusFamiliarity: bonus },
+      // BonusFamiliarity 는 0 이면 싣지 않는다 (실기록: 필드 없음 277건, 있는 167건은 모두 87 이상)
+      GirlInfo: { ...g, DeltaFamiliarity: delta, ...(bonus > 0 ? { BonusFamiliarity: bonus } : {}) },
       DateReward: { DateResult: sat, Satisfaction: sat, RewardInfo: { Charexp: xp } },
       ...(showScene ? { Script: { Chunk: [chunk(st.girl, scene!, st.lv, sceneRows.map((r) => toIns(r)))] } } : {}) } }];
   }
@@ -472,7 +507,9 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
     if (!gm) { gm = { Girlid: st.girl, Memory: [] }; snap.GirlMemorySet.GirlMemory.push(gm); }
     // 기억: 시작·장소·종료 + 이번 데이트의 사건(채팅·힌트·선호·단계 장면). 실기록: 이름은 girlMemoryTable Scriptname 또는 Girlscript
     //   (20105 Chat_B 는 Scriptname '20105_Event_Chat_B', MemoryName 'Date_Event_Chat_B'). Chat_B 의 FmFlag 는 기록상 64(의미 미확인 -> 단계 비트로 둠)
-    const names = [...(st.tutorial ? [] : ['Date_Start']), place.ScriptName, st.end ?? 'Date_End_Basic', ...(st.events ?? [])];
+    // Date_Start 기억은 넣지 않는다: 실기록 데이트 응답에 Date_Start 덩어리가 한 번도 없고 (제안·시작·진행 전부),
+    //   기억이 있는 캐릭터는 21명 중 기록 이전부터 있던 3명(20101·20102·20105)뿐 (2026-11-12 확인). 20302 돌파 뒤 첫 데이트도 장소·종료만 바뀜.
+    const names = [place.ScriptName, st.end ?? 'Date_End_Basic', ...(st.events ?? [])];
     for (const n of names) {
       const def = memories!.find((m: any) => Number(m.GirlId) === st.girl && (m.Scriptname === n || m.Girlscript === n));
       if (!def) continue;
@@ -608,13 +645,13 @@ const GIFT_FLAGS = [0, 1, 2, 4, 8, 64];
 
 function departmentStart(snap: any, g: any, ctx: Ctx): Msg[] {
   const ui = snap.UserInfo;
-  const girl = Number(g.Girlid), lv = famLevel(g, Number(g.Familiarity) || 0);
+  const girl = Number(g.Girlid), flv = famLevel(g, Number(g.Familiarity) || 0), lv = scriptLv(g, flv);
   const tutorial = !(Number(ui.Completion) & TUT_DEPARTMENT);
   ui.Completion = Number(ui.Completion) | TUT_DEPARTMENT;
   const ins = [{ Function: 'CHANGE', Parameter: [DEPT_PLACE, String(girl), 'SYSTEM', 'face_basic'] },
     ...scriptRows(girl, 'Date_Department', lv).map((r) => toIns(r)),
     { Function: 'SHOPLIST', Parameter: [String(girl)], Index: 1 }, { Index: 2 }];
-  setState(ctx, { girl, place: 0, lv, tutorial, likes: 0, dislikes: 0, chat: null, chatSat: 0, resultIndex: -1, finalIndex: 2,
+  setState(ctx, { girl, place: 0, lv, flv, tutorial, likes: 0, dislikes: 0, chat: null, chatSat: 0, resultIndex: -1, finalIndex: 2,
     dept: { scripts: ['Date_Department'] } });
   ctx.store.putUser(ctx.session.accountId, snap);
   return [

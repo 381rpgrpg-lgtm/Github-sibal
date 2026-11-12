@@ -184,7 +184,7 @@ register('MsgBattleStartReq', (body, ctx: Ctx): Msg[] => {
   //   (girlMemoryTable 에 그 존의 TimeattackStart 대본이 하나뿐일 때 그것을 쓴다. 번호 규칙은 미확인)
   const timeAttack = Number(race.RaceMode) === 2;
   const ep = ev || race.State & ST.WIN || (girlRace && !timeAttack) ? null : epName(Number(body.ZoneId), race, 'Start');
-  const fa = finalAttr(girlRace ? { ...snap, UserInfo: { ...ui, PassengerGirl: -1 } } : snap, car);
+  const fa = finalAttr(girlRace ? { ...snap, UserInfo: { ...ui, PassengerGirl: -1 } } : snap, car, { room: true });
   return [{
     name: 'MsgBattleStartAns',
     body: {
@@ -360,11 +360,16 @@ register('MsgBattleResultReq', (body, ctx: Ctx): Msg[] => {
     race.State = boss ? (race.State & ~(ST.FAIL | ST.PLAYABLE | ST.CLEAR)) | ST.WIN   // 보스: 16 (보상 수령 단계 없음)
       : (race.State & ~(ST.FAIL | ST.PLAYABLE)) | ST.CLEAR | ST.WIN;                    // 일반·캐릭터: 18
     if (Number(body.RaceLevel ?? 1) === 1 && race.StateHard & ST.LOCKED && !boss) race.StateHard = ST.PLAYABLE;
-    // 보상 상자: 보스가 아닌 레이스 첫 승리 때 존 Box1 확률 (실기록 22건: 첫 플레이 보상 레이스 3-11, 캐릭터 레이스 3-25 에도 붙음)
-    // 큰 상자(RewardBoxKind 2): 존 Box2 확률 (실기록 1건: 5-14). 두 확률을 한 번의 뽑기로 나누는 방식은 추정.
-    if (firstWin && !boss) {
-      const box = Math.random(), b2 = Number(areaOf(zone.ZoneId)?.Box2) || 0, b1 = Number(areaOf(zone.ZoneId)?.Box1) || 0;
-      if (box < b2) race.RewardBoxKind = 2; else if (box < b2 + b1) race.RewardBoxKind = 1;
+    // 보상 상자: 보스가 아닌 레이스를 이길 때마다 (첫 승리만이 아니다) 존 BattleArea Box1/Box2/Box3 확률로 RewardBoxKind 1/2/3.
+    //   실기록 2026-11-12 집계 (승리 1,149건, 대부분 반복 승리): 존 14 승리 312건 = 없음 .35 / 1 .03 / 2 .20 / 3 .42
+    //   (표 Box1 .038 / Box2 .21 / Box3 .382 / 없음 .37), 존 13 344건 = .38 / .09 / .22 / .31 (표 .38 / .066 / .221 / .332). 패배는 0건.
+    //   세 확률을 한 번의 뽑기로 나누는 순서(3 -> 2 -> 1)는 추정.
+    //   즉석 레이스(RaceIndex 21, InstantRace, RaceLifeType 2)는 상자 없음 (실기록 승리 153/153), 캐릭터 레이스 25·26 은 붙는다 (11/16).
+    const instant = !!race.InstantRace || Number(race.RaceLifeType) === 2;
+    if (!boss && !instant) {
+      const a = areaOf(zone.ZoneId), box = Math.random();
+      const b3 = Number(a?.Box3) || 0, b2 = Number(a?.Box2) || 0, b1 = Number(a?.Box1) || 0;
+      if (box < b3) race.RewardBoxKind = 3; else if (box < b3 + b2) race.RewardBoxKind = 2; else if (box < b3 + b2 + b1) race.RewardBoxKind = 1;
     }
     if (firstWin && !boss && !girlRace) {
       deltaProgress = 10;
@@ -440,7 +445,7 @@ register('MsgBattleResultReq', (body, ctx: Ctx): Msg[] => {
   if (passenger && fam && Number(passenger.Emotion) !== 1) { passenger.Familiarity = (Number(passenger.Familiarity) || 0) + fam; syncGirl(passenger); if (!updateGirl.includes(passenger)) updateGirl.push(passenger); }
 
   // 결과 응답 FinalAttr 은 이번 숙련도 증가 전 값 (실기록: MasteryAttr 은 새 값, FinalAttr 은 이전 값 기준)
-  const faBefore = finalAttr(girlRace ? { ...snap, UserInfo: { ...ui, PassengerGirl: -1 } } : snap, car);
+  const faBefore = finalAttr(girlRace ? { ...snap, UserInfo: { ...ui, PassengerGirl: -1 } } : snap, car, { room: true });
   // 차량 숙련도 (패배 +1, 승리 +2)
   car.DeltaMastery = 0;
   addMastery(car, win ? 2 : withdraw ? 0 : 1);
@@ -515,7 +520,7 @@ export function addMastery(car: any, n: number) {
 // 레이스 보상 수령 (실기록 2-11~2-15):
 //   - FirstPlayReward true 면 battleTable FirstPlayRewardItemID x FirstPlayRewardNumItem 지급 (차량이면 RewardInfo.CarInfo, 아니면 ItemInfo)
 //   - 레이스 칸 소액 보상 ItemInfo {Itemtype, Count} 지급 (코인이면 RewardInfo.Coin 에도)
-//   - RewardBoxKind 1 이면 부품 상자: ★1 부품 1개 (RewardInfo.ItemInfo 와 최상위 ItemInfo, ContainerGrade 1), 2 면 부품 2개 (ContainerGrade 2)
+//   - RewardBoxKind k (1~3) 면 부품 상자: 부품 k 개 (RewardInfo.ItemInfo 와 최상위 ItemInfo, ContainerGrade k)
 //   - 응답 Race 는 수령 전, ChangeRace 는 State 17 / FirstPlayReward false / RewardBoxKind null
 register('MsgRaceRewardReq', (body, ctx: Ctx): Msg[] => {
   const snap = ctx.store.getUser(ctx.session.accountId);
@@ -554,36 +559,28 @@ register('MsgRaceRewardReq', (body, ctx: Ctx): Msg[] => {
       give(Number(Itemtype), Number(Count));
       if (Number(Itemtype) < 61000) delete race.ItemInfo;
     }
-    // 보상 상자 내용: 존 BattleArea.Parts 가중치(★1..5)가 있으면 그 등급 부품 1개, 모두 0 이면 코인 RewardCoin/2
-    //   (실기록: 존 1 Parts 0 -> 1-13·1-14 코인 300, 존 2·3 Parts [1,0,0,0,0] -> ★1 부품)
-    if (Number(race.RewardBoxKind) === 1) {
+    // 보상 상자 내용: RewardBoxKind k 면 부품 k 개, ContainerGrade k. 부품마다 존 BattleArea.Parts 가중치(★1..5)로 등급을 따로 뽑고
+    //   부위도 따로 (실기록 2026-11-12 집계: 상자 1 = 부품 1개 132건, 2 = 2개 223건, 3 = 3개 278건;
+    //   2개 상자에서 같은 부위 36/243 = .15, 3개 모두 같은 부위 6/286 = .02 -> 부위 7종 독립 뽑기(1/7, 1/49)와 맞음;
+    //   ★2 비율 존 14 상자 3 = 61/393 = .16, 존 13 = 45/322 = .14 -> 가중치 .145 / .135 와 맞음).
+    //   예전 추정 '같은 부위 g + g+1' (실기록 1건 5-14)은 틀림.
+    //   Parts 가중치가 모두 0 이면 (존 1) 코인 RewardCoin/2 (실기록: 1-13·1-14 코인 300).
+    const kind = Number(race.RewardBoxKind) || 0;
+    if (kind >= 1) {
       const w: number[] = (areaOf(zone.ZoneId)?.Parts ?? []).map(Number);
       const tot = w.reduce((a, b) => a + (b || 0), 0);
       if (tot > 0) {
-        let r = Math.random() * tot, g = 1;
-        for (let i = 0; i < w.length; i++) { r -= w[i] || 0; if (r < 0) { g = i + 1; break; } }
-        const def = randomPart(g);
-        if (def) give(0, 0, grantPart(snap, def));
+        for (let k = 0; k < kind; k++) {
+          let r = Math.random() * tot, g = 1;
+          for (let i = 0; i < w.length; i++) { r -= w[i] || 0; if (r < 0) { g = i + 1; break; } }
+          const def = randomPart(g);
+          if (def) give(0, 0, grantPart(snap, def));
+        }
       } else {
         const c = Math.floor((Number(race.RewardCoin) || 0) / 2);
         if (c > 0) give(61001, c);
       }
-      reward.ContainerGrade = 1;
-    } else if (Number(race.RewardBoxKind) === 2) {
-      // 실기록 1건(5-14, 존 5 Parts [0.945, 0.055]): 같은 부위 ★1 34001 + ★2 34101, ContainerGrade 2.
-      //   추정: 가중치로 뽑은 등급 g 의 부품 + 같은 부위 g+1 등급 부품 (없으면 같은 등급).
-      const w: number[] = (areaOf(zone.ZoneId)?.Parts ?? []).map(Number);
-      const tot = w.reduce((a, b) => a + (b || 0), 0);
-      let r = Math.random() * (tot || 1), g = 1;
-      if (tot > 0) for (let i = 0; i < w.length; i++) { r -= w[i] || 0; if (r < 0) { g = i + 1; break; } }
-      const first = randomPart(g);
-      if (first) {
-        give(0, 0, grantPart(snap, first));
-        const sameCat = (gr: number) => { for (let i = 0; i < 20; i++) { const p = randomPart(gr); if (p && Number(p.Category) === Number(first.Category)) return p; } return null; };
-        const second = sameCat(g + 1) ?? sameCat(g);
-        if (second) give(0, 0, grantPart(snap, second));
-      }
-      reward.ContainerGrade = 2;
+      reward.ContainerGrade = kind;
     }
     reward.ItemInfo.push(...cur);
     const gotMastery = reward.ItemInfo.find((x: any) => Number(x.Itemtype) === 61005);

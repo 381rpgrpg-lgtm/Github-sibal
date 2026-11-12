@@ -12,7 +12,7 @@
 // 수락(3): 즉시 평가해 모두 달성이면 6. 보상(7): Reward ItemType/Amount 지급, RewardInfo(Coin·Charexp 합산 + ItemInfo),
 //   UserInfo, ItemInfo [], NquestInfo 에 이 퀘스트(7)와 새로 제시된 퀘스트(2).
 // 추정(기록 없음): 사건형 목표 대부분의 세부 조건, 거절(State 4/5) 처리, 트리거 1 의 의미.
-import { table, famLevel, carDefOf, partDef } from './gamecalc.js';
+import { table, girlFamLevel, carDefOf, partDef } from './gamecalc.js';
 import { grantItem } from './inventory.js';
 
 const S_OFFER = 2, S_ACCEPT = 3, S_DONE = 6, S_REWARDED = 7;
@@ -45,7 +45,7 @@ function stateValue(snap: any, o: any): number | null {
     // 7: [1, 캐릭터, 목표 등급] = 한계 돌파 등급 (10802 '클로디아를 한계돌파 해 2등급'), [1, 캐릭터, '', 단계]·[1, 캐릭터, 1, 1, 단계] = 호감도 단계
     case 7: { const g = myGirl(snap, girlId(snap, p[1])); if (!g) return 0;
       if (p.length === 3) return (Number(g.Rarity) || 1) >= Number(p[2] || 1) ? 1 : 0;
-      return famLevel(Number(g.Girlid), Number(g.Familiarity) || 0) >= Number(p[p.length - 1] || 1) ? 1 : 0; }
+      return girlFamLevel(g) >= Number(p[p.length - 1] || 1) ? 1 : 0; }
     case 16: return cars.filter((c) => carGrade(c) >= Number(p[2] || 1) && Number(c.UpgradeLevel) >= Number(p[3] || 1)).length;
     case 18: return cars.filter((c) => carGrade(c) >= Number(p[1] || 1)).length;
     case 26: { const cur = cars.find((c) => Number(c.Carid) === Number(snap.UserInfo?.Currentcar)); return cur && carGrade(cur) >= Number(p[2] || 1) ? 1 : 0; }
@@ -69,7 +69,7 @@ function triggersMet(snap: any, q: any): boolean {
     switch (Number(t.Type)) {
       case 1: if (Number(ui.Charlevel) < Number(p[0]) || Number(ui.Charlevel) > Number(p[1])) return false; break;
       case 2: if (!raceWon(snap, Number(p[0]), Number(p[1]))) return false; break;
-      case 3: { const g = myGirl(snap, Number(p[0])); if (!g || famLevel(Number(g.Girlid), Number(g.Familiarity) || 0) < Number(p[2] || 1)) return false; break; }
+      case 3: { const g = myGirl(snap, Number(p[0])); if (!g || girlFamLevel(g) < Number(p[2] || 1)) return false; break; }
       case 4: if (!done(Number(p[0]))) return false; break;
       case 7: if (!(snap.Cars?.CarInfo ?? []).some((c: any) => carDefOf(c.Cartype)?.ModelHigh === p[0])) return false; break;
       default: return false;

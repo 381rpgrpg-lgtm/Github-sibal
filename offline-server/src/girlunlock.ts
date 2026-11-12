@@ -14,7 +14,7 @@
 //        Parameter2(30·40)는 클라이언트가 쓰지 않아 뜻 미확인 -> 무시 (추정).
 //     10: 기본 등급(girlTable Rarity)보다 등급이 오른 보유 히로인 수 >= Parameter1.
 //   미충족으로 보는 것: 3 (데이터에 쓰임 없음).
-import { table, famLevel } from './gamecalc.js';
+import { table, girlFamLevel } from './gamecalc.js';
 import { newGirlRecord } from './handlers/girls.js';
 import { weeklySeason, wraceTemplate } from './handlers/weekly.js';
 
@@ -73,8 +73,8 @@ function critMet(snap: any, c: any): boolean {
   const p1 = Number(c.Parameter1), p2 = Number(c.Parameter2);
   const girl = (id: number) => (snap.MyGirls?.MyGirlInfo ?? []).find((g: any) => Number(g.Girlid) === id && Number(g.State) === 7);
   switch (Number(c.CritType)) {
-    case 1: { const g = girl(p1); return !!g && famLevel(p1, Number(g.Familiarity) || 0) >= 3; }
-    case 2: { const g = girl(p1); return !!g && famLevel(p1, Number(g.Familiarity) || 0) >= 4; }
+    case 1: { const g = girl(p1); return !!g && girlFamLevel(g) >= 3; }
+    case 2: { const g = girl(p1); return !!g && girlFamLevel(g) >= 4; }
     case 4: return raceWon(snap, p1, 20);
     case 8: return raceWon(snap, p1, p2);
     case 6: return wtBestTier(snap) <= 3;
