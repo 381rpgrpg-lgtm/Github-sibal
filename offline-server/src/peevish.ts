@@ -37,9 +37,11 @@ export const RIVAL_RIDE = 12;
 // 실기록 2026-11-11 (20103, 조건 14 값 65 = PeevishCondition2):
 //   20103 이 마지막으로 동승한 레이스(11-10 17:06 이전) 뒤 다른 캐릭터를 태운 본편 레이스 66회째(01:21:50) 결과
 //   UpdateGirlInfo 에 20103 기분 1·CauseOfPeevish 14·SolutionForPeevish 14, CallScript [Date_Peevish_Condition_B, 20103, FmLevel 4].
-//   그 사이 주간 레이스 3회는 셈에 넣지 않았다(넣으면 69회). 66 = 값 + 1 이라 '값을 넘으면' 으로 둔다 (추정: 1건, 12 는 '값에 닿으면').
+//   그 사이 주간 레이스 3회는 셈에 넣지 않았다(넣으면 69회). 66회 중 1회는 10-26(RaceType 7 캐릭터 레이스, 동승 없음)이라 빼면 65회.
+//   다시 잰 2건도 65회: 11-11 08:34 동승 변경 ~ 14:44 (본편 65, 주간 0), 11-11 15:34 동승 승리 ~ 11-12 01:31 (본편 65, 주간 2).
+//   -> 동승 가능한 본편 레이스(캐릭터 레이스·주간 제외)가 값에 닿으면 삐친다 (원인 12 와 같음, 실기록 3건 일치).
 //   데이트 2회(01:21·03:41, 만족도 5·4)로는 안 풀렸고, 20103 을 동승자로 바꾼 첫 레이스(04:17, 승리) 결과에서 기분 0·원인 0.
-//   패배한 동승 레이스로도 풀리는지는 미확인 (안내문대로 승리 때만 푼다).
+//   패배한 동승 레이스로는 안 풀린다: 11-12 01:36~03:27 20103 동승 패배 12회 동안 기분 1 유지, 03:37 동승 승리(5-12) 직후 기분 0.
 export const RACE_INVITE = 14;
 
 /** 삐침이 생긴 결과 응답의 CallScript 항목. 대본 이름 끝 A/B/C = 그 원인이 들어 있는 girlTable PeevishCondition1/2/3 칸
@@ -54,7 +56,7 @@ export function peevishScript(girlId: number, cause: number, def: any, fmLevel: 
 
 /** 본편 레이스(동승 가능한 레이스, 기권 제외)가 끝났을 때 원인 12·14 판정.
  *  - 동승자: 원인 12·14 셈을 0 으로. 원인 12 삐침은 풀리고, 원인 14 삐침은 이겼을 때 풀린다.
- *  - 그 밖의 캐릭터: 동승자를 라이벌로 둔 원인 12 셈 +1 (값에 닿으면 삐침), 원인 14 셈 +1 (값을 넘으면 삐침).
+ *  - 그 밖의 캐릭터: 동승자를 라이벌로 둔 원인 12 셈 +1, 원인 14 셈 +1 (둘 다 값에 닿으면 삐침).
  *  returns { girls: 기록이 바뀐 캐릭터(UpdateGirlInfo), scripts: 새로 삐친 캐릭터의 CallScript 항목 } */
 export function racePeevish(snap: any, passengerId: number, win: boolean, gdef: (id: number) => any,
   fmLevel: (girlId: number, fam: number) => number, nowSec = Date.now() / 1000): { girls: any[]; scripts: any[] } {
@@ -80,7 +82,7 @@ export function racePeevish(snap: any, passengerId: number, win: boolean, gdef: 
       if (!val || !(cond === RACE_INVITE || (cond === RIVAL_RIDE && passengerId > 0 && Number(def.RivalGirl) === passengerId))) continue;
       const c = (cnt[id] ??= {});
       c[cond] = (c[cond] ?? 0) + 1;
-      const due = cond === RIVAL_RIDE ? c[cond] >= val : c[cond] > val;
+      const due = c[cond] >= val; // 12·14 모두 '값에 닿으면' (위 실기록)
       if (due && Number(y.Emotion) !== 1) {
         y.Emotion = 1; y.CauseOfPeevish = cond; y.SolutionForPeevish = cond; markPeevish(snap, id, nowSec);
         c[cond] = 0;
