@@ -44,7 +44,7 @@ function diff(a,b,path,out){
 let total=0, clean=0;
 const resync = process.argv.includes('--resync');
 function syncTo(rec){
-  const u = rec.response.messages.find(m=>m.name==='MsgUserData')?.body; if(!u) return;
+  const u = (rec.response?.messages ?? []).find(m=>m.name==='MsgUserData')?.body; if(!u) return;
   if(!process.argv.includes('--daily')) for(const p of u.PropertySet?.Property??[]) if(p.PropertyName==='DQUEST') p.Tvalue=4102444800;
   const d=new DatabaseSync(dbPath); const id=d.prepare('select account_id from users').get().account_id;
   d.prepare('update users set snapshot=? where account_id=?').run(JSON.stringify(u), id);
@@ -54,7 +54,7 @@ for(const r of recs){
   if(r.name==='MsgLoginReq'){ if(resync && r!==login) syncTo(r); continue; }
   if(only.length && !only.includes(r.name)) { await rpc(r.name, r.request); continue; }
   const mine=await rpc(r.name, r.request);
-  const rec=r.response.messages||[];
+  const rec=r.response?.messages||[];
   const out=[];
   const mn=mine.map(m=>m.name).filter(n=>n!=='MsgNotifyEvent'&&n!=='MsgUpdateNquest'&&n!=='MsgUpdateData').join(','), rn=rec.map(m=>m.name).filter(n=>n!=='MsgNotifyEvent'&&n!=='MsgUpdateNquest'&&n!=='MsgUpdateData').join(',');
   if(mn!==rn) out.push(`messages: mine ${mn} rec ${rn}`);
