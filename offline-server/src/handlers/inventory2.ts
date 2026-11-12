@@ -20,14 +20,16 @@ const items = (snap: any): any[] => snap.Items?.ItemInfo ?? [];
 //   비용 = 경험치 합을 10 단위로 올림 (91->100, 136->140)
 //   능력치 = floor(기본 x (1 + 비율 x (레벨 - 1))), 비율은 등급마다 다르다:
 //     ★1: Lv2 {18,0,9,-10} -> {20,0,10,-12} (비율 0.11~0.2, 0.15 로 둠)
-//     ★4: 실측 2026-11-08 37302 {62,62,-31,-31} -> Lv2 {65,65,-33,-33}, Lv3 {69,69,-35,-35}, Lv4 {73,73,-37,-37} = 비율 0.06 정확히
-//     ★2·★3·★5·★6 은 기록이 없어 ★1-★4 사이를 직선으로 잇고(★2 0.12, ★3 0.09) ★5 이상은 ★4 값(0.06)을 쓴다 (추정)
+//     ★4: 실측 37302 {62,62,-31,-31} Lv2~30 (Lv30 {175,175,-88,-88}) 과 33301 {68,0,28,-29} Lv1~15 (Lv15 {127,0,52,-55}),
+//         중복 뺀 42점이 모두 맞는 비율은 0.062903~0.06298 -> 0.06294 (2026-11-12 봇 기록. 이전 0.06 은 Lv4 까지만 맞고 Lv30 에서 6 모자랐다)
+//     ★5: 실측 37505 {100,-36,-2,54} Lv1~6 (Lv6 {120,-44,-3,64}) -> 0.04~0.0407 -> 0.04 (1.16 같은 값이 부동소수로 115.999.. 가 되지 않게 1e-9 더해 버림)
+//     ★2·★3 은 기록이 없어 ★1-★4 사이를 직선으로 잇는다(★2 0.12, ★3 0.09). ★6 은 기록이 없어 ★5 값 (추정)
 //   응답 {Result 1, Upgraded{부품 + PrevItemLevel, PrevItemExp}, Consumed[재료], UserInfo}
-const PART_GROWTH: Record<number, number> = { 1: 0.15, 2: 0.12, 3: 0.09, 4: 0.06, 5: 0.06, 6: 0.06 };
+const PART_GROWTH: Record<number, number> = { 1: 0.15, 2: 0.12, 3: 0.09, 4: 0.06294, 5: 0.04, 6: 0.04 };
 const partAttrs = (def: any, lv: number) => {
   const out: any = {};
   const r = PART_GROWTH[Number(def.Grade) || 1] ?? 0.06;
-  for (const k of ATTRS) out[k] = Math.floor((Number(def.Attributes?.[k]) || 0) * (1 + r * (lv - 1)));
+  for (const k of ATTRS) out[k] = Math.floor((Number(def.Attributes?.[k]) || 0) * (1 + r * (lv - 1)) + 1e-9);
   return out;
 };
 register('MsgCombinePartsReq', (body, ctx): Msg[] => {
