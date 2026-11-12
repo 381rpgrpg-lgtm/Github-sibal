@@ -53,8 +53,11 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 //   강화 결과 화면(CarUpgradeResult.IShowResult)은 effect.playing 이 꺼지면(최대 5초 대기) 결과를 표시하고,
 //   합성(CombinationEffectStart)은 연출 Promise 가 끝나면 결과 팝업을 띄우므로 바로 반환해도 흐름이 그대로다.
 //   2026-11-01 실기기: 튜토리얼 강화 직후 이 연출(메인 렌더러에 ModelHigh 차량 + 파티클)에서 같은 Adreno 크래시.
-const REINFORCE_FX_RE = /async\['playReinforceEffect'\]\(\{carTop:[\w$]+,makeCar:[\w$]+,effect:[\w$]+\}\)\{/;
-const COMBINE_FX_RE = /async\[[\w$]+\(0x[0-9a-f]+\)\]\(\{carLeft:[\w$]+,carRight:[\w$]+,makeCar:[\w$]+\}\)\{/;
+//   메서드 이름은 빌드마다 'playReinforceEffect' 그대로이거나 난독화 호출 [a9p(0x3de0)] 이다 (2026-11-12 빌드 ba9d47e4: 둘 다 난독화).
+//   인자 구조분해 {carTop,makeCar,effect} / {carLeft,carRight,makeCar} 로 찾는다 (지금까지 7개 index-*.js 모두 각 1건).
+const FX_NAME = (lit: string) => String.raw`async(?:\['${lit}'\]|\[[\w$]+\(0x[0-9a-f]+\)\])`;
+const REINFORCE_FX_RE = new RegExp(FX_NAME('playReinforceEffect') + String.raw`\(\{carTop:[\w$]+,makeCar:[\w$]+,effect:[\w$]+\}\)\{`);
+const COMBINE_FX_RE = new RegExp(FX_NAME('playCombinationEffect') + String.raw`\(\{carLeft:[\w$]+,carRight:[\w$]+,makeCar:[\w$]+\}\)\{`);
 const PICTURE_MODE_RE = /(function\s+[\w$]+\(\{env:[\w$]+=globalThis,gpu:[\w$]+=[\w$]+\(\(\)=>'','gpu'\)\}=\{\}\)\{)(return\s+[\w$]+\([\w$]+\)&&\()/;
 
 export interface PatchOptions { pictureMode: string; carEffects?: string; glTrace?: string; appOnly?: boolean }
