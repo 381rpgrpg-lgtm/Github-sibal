@@ -559,6 +559,9 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
 //   20206 11-09 11:49 는 46회째(1 차이, 원인 미확인). 20206 은 11-05 친밀도 1단계(148)일 때 45회를 넘고도 안 삐쳤다 -> 친밀도 3단계 이상만 (추정).
 //   그 밖의 조건(1 불만족 데이트, 9 레이스만, 10 데이트만 등)은 미확인 — 2026-11-05 실험: 싫어한 답 데이트 5회(조건 1, 값 5)는
 //   삐침이 아니라 화남(2)만 되었다. 12·14 는 레이스 쪽(peevish.ts racePeevish).
+//   조건 1 실기록 2026-11-12 (20201, PeevishCondition1 = 1, 값 2, FM 부스트 중): 데이트 3회 만족도 4·3·2 (DateResult 같음) ->
+//   첫 결과에 Emotion 0->3, 셋째 결과에 Emotion 1·CauseOfPeevish 1. 다음 데이트(만족도 4, 레스토랑)로 Emotion 0·원인 0.
+//   추정: 만족도 3 이하 데이트가 값만큼 쌓이면 삐침 (1건. 위 11-05 실험의 화남과 어떻게 갈리는지 미확인이라 아직 구현하지 않음).
 export function rivalPeevish(snap: any, dated: number): any[] {
   init();
   const cnt: Record<string, Record<string, number>> = (snap.peevishCount ??= {});
