@@ -225,17 +225,34 @@ register('MsgBuyProductReq', (body, ctx): Msg[] => {
   ui.Cash -= price.Cash; ui.Coin -= price.Coin; ui.SocialPoint -= price.SocialPoint; ui.Token -= price.Token;
 
   // 지급
+  // 실기록 응답 형식 (2026-11-07 73005 코어 30개 캐시 30, 2026-11-12 74027 코인 200,000 캐시 180):
+  //   {Seq, Result 1, StoreItemId, UserInfo, RewardInfo{Coin, Charexp 0, Cash 0, Familiartity 0, ItemInfo, CarInfo, ContainerGrade 0},
+  //    Cost{Cash, Coin, SocialPoint, Token, GoldCash 0}, Buycount, [ShopWeekly], GachaPity, PartsPity, PartsPityHq}  (Items·Cars 없음)
+  //   ItemInfo: 코인 = {Itemtype 61001, Count 받은 양, DeltaNum 받은 양} (Itemid·StackNum 없음),
+  //             아이템 = {Itemid, Itemtype, Count 받은 양, StackNum 새 수량, DeltaNum 받은 양} (73005: Count 30, StackNum 76, DeltaNum 30)
   const itemDeltas: any[] = [];
   const newCars: any[] = [];
+  let coinGot = 0;
   rewards.forEach((r, i) => {
-    if (kinds[i] === 'coin') { ui.Coin = (Number(ui.Coin) || 0) + r.amount; return; }
+    if (kinds[i] === 'coin') { ui.Coin = (Number(ui.Coin) || 0) + r.amount; coinGot += r.amount; itemDeltas.push({ Itemtype: COIN_ITEM, Count: r.amount, DeltaNum: r.amount }); return; }
     if (kinds[i] === 'car') { const c = newCar(snap, r.type); snap.Cars.CarInfo.push(c); newCars.push(c); return; }
     grantItem(snap, r.type, r.amount);
     for (const it of snap.Items.ItemInfo.filter((x: any) => Number(x.Itemtype) === r.type)) {
-      itemDeltas.push({ ...it, StackNum: it.Count, DeltaNum: r.amount });
+      itemDeltas.push({ ...it, Count: r.amount, StackNum: it.Count, DeltaNum: r.amount });
     }
   });
   ctx.store.setMeta(limitKey, String(bought + 1));
+  // 주간 구매 기록 ShopWeekly {Week, Used{상품: 횟수}} (실기록 2026-11-12 74027 첫 구매 -> {"Week":618,"Used":{"74027":1}};
+  //   이 응답과 이후 로그인 UserData 에 생김. 73005 코어 상품 응답에는 없음).
+  //   Week 618 = WeeklyPacks.Week(2967, 월요일 00:00 UTC 경계) - 2349 로 맞춘다 [추정: 경계 시각]. 주간 한도 수치는 미확인이라 막지 않는다.
+  //   대상: 캐시로 사는 코인 상품(StoreTab5, 보상 코인) [추정: 74027 외 상품은 기록 없음]
+  let shopWeekly: any = null;
+  if (si.StoreTab5 && price.Cash && kinds.every((k) => k === 'coin')) {
+    const week = Math.floor((Date.now() / 1000 + 259200) / 604800) - 2349;
+    const sw = snap.ShopWeekly && Number(snap.ShopWeekly.Week) === week ? snap.ShopWeekly : { Week: week, Used: {} };
+    sw.Used[String(id)] = (Number(sw.Used[String(id)]) || 0) + 1;
+    snap.ShopWeekly = shopWeekly = sw;
+  }
   // 추정: 첫 구매로 OpenStore 튜토리얼(32768) 완료 (실기록 71000 구매 응답에서 Completion |= 32768)
   ui.Completion = Number(ui.Completion) | 32768;
   ctx.store.putUser(ctx.session.accountId, snap);
@@ -243,8 +260,10 @@ register('MsgBuyProductReq', (body, ctx): Msg[] => {
     name: 'MsgBuyProductAns',
     body: {
       Seq: 1, Result: R_OK, StoreItemId: id, UserInfo: ui,
-      RewardInfo: { ItemInfo: itemDeltas, CarInfo: newCars, UserInfo: ui, ContainerGrade: 0 },
-      Items: snap.Items, Cars: snap.Cars,
+      RewardInfo: { Coin: coinGot, Charexp: 0, Cash: 0, Familiartity: 0, ItemInfo: itemDeltas, CarInfo: newCars, ContainerGrade: 0 },
+      Cost: { Cash: price.Cash, Coin: price.Coin, SocialPoint: price.SocialPoint, Token: price.Token, GoldCash: 0 }, Buycount: Number(body?.Buycount) || 1,
+      ...(shopWeekly ? { ShopWeekly: shopWeekly } : {}),
+      GachaPity: snap.GachaPity, PartsPity: snap.PartsPity, PartsPityHq: snap.PartsPityHq,
     },
   }];
 });
