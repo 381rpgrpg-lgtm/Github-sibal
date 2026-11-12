@@ -2,9 +2,9 @@
 //
 // MsgEquipPartsReq {Itemid, Equipindex, Equipcarid}  (탈착은 Equipindex 0, Equipcarid 0)
 //   -> MsgChangeParts {Seq, Result 1, ItemInfo:[부품], UserInfo, CarInfo(+CarEffect [])}
-//   기록: 첫 장착 때 Completion 에 EquipParts(65536) 비트. 탈착 시 코인 차감 = MsgGetPriceAns.Cost.Coin (1★ Lv1 = 30).
+//   기록: 첫 장착 때 Completion 에 EquipParts(65536) 비트. 탈착 비용 = MsgGetPriceAns.Cost.Coin (11-01 1★ Lv1 = 30, 11-12 전부 0 -> 아래 detachCost).
 // MsgGetPriceReq {ItemInfo:{Itemid}} -> {Seq, Result 1, ItemInfo:{Itemid}, Cost:{Coin}}
-//   탈착 비용 = partLevelBases grade<부품 Grade> 의 해당 레벨 SellPrice (기록 30 = grade1 Lv1 SellPrice).
+//   탈착 비용: 11-01 기록은 partLevelBases grade<부품 Grade> 레벨 SellPrice(30 = grade1 Lv1), 11-12 기록은 0 (detachCost 참고).
 // MsgCarSlotCostReq {CarInfo:{Carid, SlotNum}} -> {Seq, Result 1, CarInfo(변경 없음), Cost:{Coin}}  기록: 슬롯 2 = 코인 100
 // MsgUpdateNquestReq {NquestInfo:{QuestId, State}} -> {Seq, Result 1, RequestedQuestId, RequestedState,
 //   NquestInfo:[{QuestId, State, Objective:[{ObjId, CurrentValue 0, CompleteCash, CashCleared false}]}]}  (nquests.json 정의 순서)
@@ -43,7 +43,13 @@ const slotCost = (car: any, slot: number) => {
   return SLOT_COST[`${Number(car.Grade) || 1}|${slot}`] ?? null;
 };
 
+// 실기록 2026-11-12 (탈착 1건 + MsgGetPriceReq 12건): ★3~★5, Lv1~31, 현재 차·다른 차·창고 부품 모두 Cost.Coin 0,
+//   탈착 {Itemid, Equipindex 0, Equipcarid 0} -> MsgChangeParts Result 1, 코인 그대로 (차 8 37201 ★3 Lv1).
+//   11-01 기록(★1 Lv1 = 30 = grade1 SellPrice)과 다르다: 그 사이 실서버 규칙이 바뀐 것으로 보고 [추정] 지금 기록대로 무료.
+//   예전 규칙(등급·레벨 SellPrice)은 DETACH_SELLPRICE 로 남긴다.
+const DETACH_SELLPRICE = false;
 function detachCost(part: any): number {
+  if (!DETACH_SELLPRICE) return 0;
   init();
   const grade = Number(partDefs!.get(Number(part.Itemtype))?.Grade) || 1;
   const base = levelBases!.find((b: any) => b.BaseName === `grade${grade}`);
