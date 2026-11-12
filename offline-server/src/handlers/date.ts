@@ -22,7 +22,7 @@
 //   - 종료 대본: 좋아함>싫어함 Good, 같으면 Basic, 적으면 Bad. 채팅 이벤트는 조건(ChatConditionA..C) 충족 중 무작위(튜토리얼은 A)
 //   - 백화점(DateType 3) 데이트는 아래 departmentStart/departmentProgress.
 import { readFileSync, existsSync } from 'node:fs';
-import { markPeevish, RIVAL_RIDE, RACE_INVITE, peevishScript } from '../peevish.js';
+import { markPeevish, RIVAL_RIDE, RACE_INVITE, DULL_DATE, peevishScript, dullDatePeevish, peevishDateSat } from '../peevish.js';
 import { register, type Msg, type Ctx } from '../rpc.js';
 import { bumpProperty, levelUp } from './battle.js';
 import { ensureGirl, expansionReady } from './girls.js';
@@ -443,7 +443,8 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
     // 싫어하는 장소(girlTable DislikePlace)는 -2: 20101 의 대학(42071) 데이트 — 문항 없는 2건 1, 삐친 상태 데이트 1. 같은 삐친 데이트라도
     //   20303 노래방(보통 장소)은 3 (2026-11-05). 삐친 데이트는 문항이 없어 3 + 장소 보정. 선호 장소 가산은 미확인
     const placeAdj = Number(gdef(st.girl)?.DislikePlace) === st.place ? -2 : 0;
-    const endSat = st.noq ? (st.end === 'Date_End_Good' ? 4 : st.end === 'Date_End_Bad' ? 2 : 3) : 3;
+    // 삐침 데이트는 장소별 실기록 분포 (peevish.ts PEEVISH_PLACE_SAT, 2026-11-12: 레스토랑 4 x6 … 동물원 2)
+    const endSat = st.peevish ? peevishDateSat(st.place) : st.noq ? (st.end === 'Date_End_Good' ? 4 : st.end === 'Date_End_Bad' ? 2 : 3) : 3;
     const sat = Math.max(1, Math.min(5, endSat + (st.peevish ? 0 : st.likes - st.dislikes) + placeAdj));
     st.satisfaction = sat;
     // 한계 돌파 캐릭터는 x1.1 (실기록 2026-11-12, 모두 Rarity 2: 20302 165 -> 182, 139 -> 153, 243 x 1.25 -> 334, 20105 48 -> 53).
@@ -540,6 +541,13 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
         else g.Emotion = sat >= 4 ? 3 : 0;
       }
     }
+    // 원인 1 '재미없는 데이트' (peevish.ts dullDatePeevish): 만족도 3 이하 연달아 값만큼 -> 삐침.
+    //   삐침 풀기 데이트에서 생기면 풀림 대본 없이 CallScript [] (실기록 2026-11-12 15:06), 보통 데이트면 Date_Peevish_Condition_<칸> (07:22)
+    const dullCalls: any[] = [];
+    if (dullDatePeevish(snap, g, sat, gdef(st.girl))) {
+      if (clearCalls.length) clearCalls.length = 0;
+      else { const sc = peevishScript(st.girl, DULL_DATE, gdef(st.girl), famLevel(g, Number(g.Familiarity) || 0)); if (sc) dullCalls.push(sc); }
+    }
     //   CauseOfPeevish·SolutionForPeevish(0) 는 기분이 0 이 아니게 될 때 레코드에 생긴다 (실기록: 기분 3·2 결과에만 있음)
     if (Number(g.Emotion) !== 0) { g.CauseOfPeevish ??= 0; g.SolutionForPeevish ??= 0; }
     // 첫 데이트 후 관계도 다음 노드 개방
@@ -575,7 +583,7 @@ register('MsgScriptProgressReq', (body, ctx): Msg[] => {
       { name: 'MsgScriptProgressAns', body: head },
       { name: 'MsgDateResultAns', body: {
         Seq: 2, GirlInfo: g, UserInfo: ui, DatePlace: st.place, DateResult: sat, UpdateGirlInfo: updateGirl,
-        GirlMemorySet: snap.GirlMemorySet, GgraphPatch: { Gnode: patch }, CallScript: [...clearCalls, ...peevishCalls], ...(propChanged ? { PropertySet: snap.PropertySet } : {}),
+        GirlMemorySet: snap.GirlMemorySet, GgraphPatch: { Gnode: patch }, CallScript: [...clearCalls, ...dullCalls, ...peevishCalls], ...(propChanged ? { PropertySet: snap.PropertySet } : {}),
       } },
       ...(questChanges.length ? [{ name: 'MsgUpdateNquest', body: { Seq: 3, NquestInfo: questChanges } }] : []),
       ...(raceUpdate.length ? [{ name: 'MsgUpdateData', body: { Seq: 4, UpdateData: { RaceZone: raceUpdate } } }] : []),
