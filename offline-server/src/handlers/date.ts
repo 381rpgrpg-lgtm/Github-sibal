@@ -254,8 +254,9 @@ register('MsgDateStartReq', (body, ctx): Msg[] => {
   const girl = Number(g.Girlid), flv = famLevel(g, Number(g.Familiarity) || 0), lv = scriptLv(g, flv);
   // 장소 UnlockFmLevel 은 서버가 막지 않는다 (실기록 2026-11-12: 친밀도 단계 < UnlockFmLevel 인 데이트 시작 15건 모두 Result 1,
   //   한계 돌파 캐릭터 포함). 예전 '호감도 단계 부족' 거절은 추정이었고 틀렸다.
-  // 장소 비용 = 표 Price x 희귀도 배율(1성 1, 2성 1.5, 3성 2)을 100 단위 반올림 (실기록 2026-11-06, 4명 11개 장소 15건 모두 일치:
-  //   20402·20202(3성) 바 1200 -> 2400, 카페 375 -> 800, 20303(2성) 노래방 1400 -> 2100, 20302(1성) 42071 350 -> 400)
+  // 장소 비용 = 표 Price x 희귀도 배율(Rarity r -> 1 + 0.5(r-1): 1, 1.5, 2, 2.5, 3)을 100 단위 반올림(.5 는 올림).
+  //   실기록 2026-11-04~12 데이트 시작 459건, 20명, 17개 장소, Rarity 1~5 모두 일치 (예: 대학 350 x3 = 1050 -> 1100,
+  //   카페 375 x2.5 = 937.5 -> 900, 핫스폿 420 x2.5 = 1050 -> 1100, 바 1200 x2 -> 2400)
   const rarity = Number(g.Rarity) || Number(gdef(girl)?.Rarity) || 1;
   const price = Math.round((Number(place.Price) || 0) * (1 + 0.5 * (rarity - 1)) / 100) * 100;
   if ((Number(ui.Coin) || 0) < price) return fail('코인 부족', 3);
