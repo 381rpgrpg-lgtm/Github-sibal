@@ -6,7 +6,8 @@
 // 조건 종류(text_kr girl_unlock_condition_N): 1 X 호감도 3단계, 2 X 호감도 4단계, 3 장소 데이트 4점 이상, 4 구역 보스 클리어,
 //   5 조건 완료 후 X 와 데이트, 6/7 월드 투어 랭크, 8 구역 P1 의 P2 레이스 클리어, 9 주간 레이스 컷오프.
 //   10 한계 돌파한 히로인 N명 보유 (text_kr girl_unlock_condition_n_count, 클라이언트 GirlUnlockConditionCell case 10).
-//   구현: 1·2·4·8, 5(데이트 종료 시 나머지 조건이 모두 충족돼 있으면 충족). 충족 비트는 노드 GirlInfo.UnlockCritFlag 에 누적.
+//   구현: 1·2·4·8, 5(데이트 종료 시 나머지 조건이 모두 충족돼 있으면 충족. 그 데이트로 조건 2가 채워져도 같은 데이트가 5로 인정됨 —
+//   실기록 2026-11-13 20501). 충족 비트는 노드 GirlInfo.UnlockCritFlag 에 누적.
 //   2026-11-06 추가 (실기록 없음, 클라이언트 표시 코드 기준):
 //     6/7: 지금까지 도달한 최고 월드 투어 티어(snap.wtBestTier 또는 현재 RankTier)가 골드(3)/플래티넘(2) 이상. 티어 번호 5 브론즈 … 2 플래티넘.
 //     9: 리그 = Parameter1 + vconst UnlockCrit9Offset(표 0, 없으면 클라이언트 기본 2), 컷오프 = battleTable.CutoffTime[시즌 % WeeklyRaceReward 마지막 Week]
@@ -15,7 +16,7 @@
 //     10: 기본 등급(girlTable Rarity)보다 등급이 오른 보유 히로인 수 >= Parameter1.
 //   미충족으로 보는 것: 3 (데이터에 쓰임 없음).
 import { table, girlFamLevel } from './gamecalc.js';
-import { newGirlRecord } from './handlers/girls.js';
+import { newGirlRecord, ensureGirl } from './handlers/girls.js';
 import { weeklySeason, wraceTemplate } from './handlers/weekly.js';
 
 let crits: Map<number, any[]> | null = null;
@@ -29,6 +30,16 @@ function critsByGirl(): Map<number, any[]> {
     }
   }
   return crits;
+}
+
+/** 그 캐릭터를 여는 캐릭터 레이스(battleTable BattleArea Race, RaceType 7, GirlId)가 있는가. 20501·20502 는 없다. */
+let girlRaceIds: Set<number> | null = null;
+function hasGirlRace(gid: number): boolean {
+  if (!girlRaceIds) {
+    girlRaceIds = new Set();
+    for (const a of table('battleTable.json')?.BattleArea ?? []) for (const r of a.Race ?? []) if (Number(r.RaceType) === 7 && r.GirlId) girlRaceIds.add(Number(r.GirlId));
+  }
+  return girlRaceIds.has(Number(gid));
 }
 
 const zoneOfArea = (snap: any, area: number) => (snap.RaceZones?.RaceZone ?? []).find((z: any) => Number(z.ZoneId) === area - 50000);
@@ -103,6 +114,20 @@ export function evalGirlUnlocks(snap: any, datedGirl?: number): { nodes: any[]; 
       if (list.every((o) => o === c || flag & bit(o))) flag |= bit(c);
     }
     const all = list.every((c) => flag & (1 << (Number(c.Rid) - 1)));
+    // 캐릭터 레이스(BattleArea RaceType 7)가 없는 캐릭터(20501·20502)는 조건을 다 채우면 바로 열린다 (State 7, 보유 목록에 추가).
+    //   실기록 2026-11-13 05:59 20501: 20403 호감도 7772 -> 8002(4단계)로 만든 데이트 하나가 조건 2와 5를 함께 채움 ->
+    //   데이트 결과 GgraphPatch 노드 24 State 7, GirlInfo {신규 레코드, Familiarity 0, NextCoin 400(100 x Rarity 4),
+    //   NextFamiliarityTime 지금+12시간, UnlockCritFlag 7}. UnlockCritOverride 없음. 다음 로그인 MyGirlInfo 에 State 7 로 나옴.
+    if (all && !hasGirlRace(gid)) {
+      const g = ensureGirl(snap, gid);
+      Object.assign(g, { Familiarity: 0, NextCoin: 100 * (Number(g.Rarity) || 1), State: 7,
+        NextFamiliarityTime: Math.floor(Date.now() / 1000) + 12 * 3600, UnlockCritFlag: flag });
+      delete g.UnlockCritOverride; // 실기록: 잠긴 동안 MyGirlInfo 에 있던 State 5 레코드에서 빠진다
+      node.State = 7;
+      node.GirlInfo = g;
+      nodes.push(node);
+      continue;
+    }
     const state = all ? 6 : flag ? 5 : Number(node.State) || 4;
     // 로그인 데이터의 미개방 노드 GirlInfo 는 {Girlid} 뿐이다: 저장된 플래그가 없으면 상태가 같을 때 바뀐 것으로 보지 않는다
     const stored = node.GirlInfo?.UnlockCritFlag;
