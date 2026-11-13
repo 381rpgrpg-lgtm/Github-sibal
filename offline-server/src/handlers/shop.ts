@@ -212,6 +212,15 @@ register('MsgBuyProductReq', (body, ctx): Msg[] => {
   const bought = Number(ctx.store.getMeta(limitKey) ?? 0);
   if (si.BuyLimit && bought >= Number(si.BuyLimit)) return reason('구매 한도 도달');
 
+  // 캐시 코인 상품 주간 한도: 상품마다 한 주 1회 (실기록 2026-11-13 23:31 UTC: ShopWeekly {Week 618, Used {74027: 1}} 상태에서 74027 재구매 ->
+  //   {Seq, Result 7, StoreItemId, Buycount, UserInfo}, 캐시·코인 그대로. 같은 주 74026·74025 는 각 1회 성공하고 Used 에 기록됨)
+  const weeklyCoin = !!(si.StoreTab5 && price.Cash && kinds.every((k) => k === 'coin'));
+  const curWeek = Math.floor((Date.now() / 1000 + 259200) / 604800) - 2349;
+  if (weeklyCoin && snap.ShopWeekly && Number(snap.ShopWeekly.Week) === curWeek && Number(snap.ShopWeekly.Used?.[String(id)]) >= 1) {
+    console.warn(`[shop] ${id} 구매 거절: 이번 주 한도 (ShopWeekly)`);
+    return [{ name: 'MsgBuyProductAns', body: { Seq: 1, Result: 7, StoreItemId: id, Buycount: Number(body?.Buycount) || 1, UserInfo: snap.UserInfo } }];
+  }
+
   // 차고 칸
   const carsNeeded = kinds.filter((k) => k === 'car').length;
   const ui = snap.UserInfo;
@@ -244,11 +253,11 @@ register('MsgBuyProductReq', (body, ctx): Msg[] => {
   ctx.store.setMeta(limitKey, String(bought + 1));
   // 주간 구매 기록 ShopWeekly {Week, Used{상품: 횟수}} (실기록 2026-11-12 74027 첫 구매 -> {"Week":618,"Used":{"74027":1}};
   //   이 응답과 이후 로그인 UserData 에 생김. 73005 코어 상품 응답에는 없음).
-  //   Week 618 = WeeklyPacks.Week(2967, 월요일 00:00 UTC 경계) - 2349 로 맞춘다 [추정: 경계 시각]. 주간 한도 수치는 미확인이라 막지 않는다.
-  //   대상: 캐시로 사는 코인 상품(StoreTab5, 보상 코인) [추정: 74027 외 상품은 기록 없음]
+  //   Week 618 = WeeklyPacks.Week(2967, 월요일 00:00 UTC 경계) - 2349 로 맞춘다 [추정: 경계 시각]. 한도는 위 (상품마다 주 1회).
+  //   대상: 캐시로 사는 코인 상품(StoreTab5, 보상 코인). 실기록 74025·74026·74027 (2026-11-12~13)
   let shopWeekly: any = null;
-  if (si.StoreTab5 && price.Cash && kinds.every((k) => k === 'coin')) {
-    const week = Math.floor((Date.now() / 1000 + 259200) / 604800) - 2349;
+  if (weeklyCoin) {
+    const week = curWeek;
     const sw = snap.ShopWeekly && Number(snap.ShopWeekly.Week) === week ? snap.ShopWeekly : { Week: week, Used: {} };
     sw.Used[String(id)] = (Number(sw.Used[String(id)]) || 0) + 1;
     snap.ShopWeekly = shopWeekly = sw;
