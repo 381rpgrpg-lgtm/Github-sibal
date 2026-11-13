@@ -19,13 +19,25 @@ export function carLevelRow(grade: number, level: number) {
   return levels!.find((g: any) => Number(g.Grade) === grade)?.CarLevel?.find((l: any) => Number(l.Level) === level) ?? null;
 }
 // 대상 등급별 경험치 1당 코인. 실측: ★1 8, ★2 32.5, ★3 50.25 (2026-11-05 10203 강화 8건: 20 -> 1005, 10 -> 502, 120 -> 6030),
-//   ★4 72.1 (10604 강화: 20 -> 1442, 60 -> 4327). 그 위는 ★3->★4 비율(1.435배)로 추정.
-//   (예전 추정식 32.5 x 4.0625^(g-2) 는 ★4 를 536 으로 계산해 크게 틀렸다)
-const COST_PER_EXP: Record<number, number> = { 1: 8, 2: 32.5, 3: 50.25, 4: 72.1 };
-const costPerExp = (g: number) => COST_PER_EXP[g] ?? 72.1 * 1.435 ** (g - 4);
+//   ★4 72.125, ★5 178.1875, 비용 = floor(쓰인 경험치 x 단가). 실측 강화 조회 126가지 조합 (2026-11-01~13) 모두 일치:
+//   ★3 10 -> 502, ★4 10 -> 721, 39 -> 2812, 60 -> 4327, 160 -> 11540, ★5 10 -> 1781, 20 -> 3563, 40 -> 7127, 620 -> 110476.
+//   ★6 은 ★4->★5 비율(2.4705배)로 추정. (예전: ★4 72.1 반올림, ★5 추정 103.5 는 42% 낮았다)
+const COST_PER_EXP: Record<number, number> = { 1: 8, 2: 32.5, 3: 50.25, 4: 72.125, 5: 178.1875 };
+const costPerExp = (g: number) => COST_PER_EXP[g] ?? 178.1875 * (178.1875 / 72.125) ** (g - 5);
+// 확률 보너스(= 대성공 확률 %, 재료마다 더함): 6 x 등급 차 배율 x 레벨 배율. 실측 강화 조회 63가지 조합 (2026-11-01~13):
+//   등급 차(대상 - 재료) 0 -> 6, 1 -> 4.5, 2 -> 3, 3 이상 -> 1.2 (★1->★4, ★2->★5, ★1->★5 모두 1.2).
+//   재료 레벨 L: x (1 + (L-1) x 25/27) [추정, 표본 2개: ★2 Lv2 -> ★4 5.8, ★3 Lv10 x2 -> ★5 56]. 0.1 단위 반올림.
+//   재료가 대상보다 높은 등급이면 미확인 (6).
+const GRADE_DIFF_F = [1, 0.75, 0.5, 0.2];
+export function materialBonus(targetGrade: number, matGrade: number, matLevel: number): number {
+  const d = targetGrade - matGrade;
+  const f = d <= 0 ? 1 : GRADE_DIFF_F[Math.min(d, 3)];
+  return 6 * f * (1 + (Math.max(1, matLevel) - 1) * 25 / 27);
+}
 const ATTRS = ['AttribMaxSpd', 'AttribAcc', 'AttribStability', 'AttribDrift'];
 
-export function upgradePreview(snap: any, car: any, sources: any[]):
+/** bonusExp: 대성공으로 더 받는 경험치(비용 없음). 실기록 2026-11-08 ★5 Lv3 CarExp 60 + 재료 620 + 대성공 310 -> Lv9 CarExp 30 */
+export function upgradePreview(snap: any, car: any, sources: any[], bonusExp = 0):
   { error: string } | { exp: number; cost: number; bonus: number; expected: any } {
   init();
   const list: any[] = snap.Cars?.CarInfo ?? [];
@@ -40,10 +52,10 @@ export function upgradePreview(snap: any, car: any, sources: any[]):
     if (Number(src.Carid) === Number(snap.UserInfo?.Currentcar)) return { error: '현재 차량은 재료로 사용 불가' };
     if (src.IsLocked) return { error: '잠긴 차량은 재료로 사용 불가' };
     exp += Number(carLevelRow(Number(src.Grade) || 1, Number(src.UpgradeLevel) || 1)?.MaterialExp) || 0;
-    bonus += 6 * 0.75 ** Math.max(0, grade - (Number(src.Grade) || 1));
+    bonus += materialBonus(grade, Number(src.Grade) || 1, Number(src.UpgradeLevel) || 1);
   }
   if (!exp) return { error: '재료 없음' };
-  let lv = startLv, carExp = (Number(car.CarExp) || 0) + exp;
+  let lv = startLv, carExp = (Number(car.CarExp) || 0) + exp + bonusExp;
   // 최대 레벨까지 실제로 쓰인 경험치만 비용에 넣는다 (실기록: ★2 Lv9 CarExp 18 + 재료 20 -> 필요 2 만큼 65 코인 = 650 x 2/20)
   let toMax = -(Number(car.CarExp) || 0);
   for (let l = startLv; l < maxLevel; l++) toMax += Number(carLevelRow(grade, l)?.CarExp) || 0;
@@ -59,9 +71,7 @@ export function upgradePreview(snap: any, car: any, sources: any[]):
   const Attributes: any = { ...(car.Attributes ?? {}) };
   for (const k of ATTRS) Attributes[k] = (Number(Attributes[k]) || 0) + add;
   return {
-    // 확률 보너스: 재료마다 6 x 0.75^(대상 등급 - 재료 등급). 실측 11건 (2026-11-01~02): ★1->★1 6, ★1->★2 4.5, ★2->★2 6,
-    //   ★2 대상에 ★1+★2 = 10.5, ★1x2+★2x2 = 21. 재료가 대상보다 높은 등급일 때는 미확인(6 으로 둔다).
-    exp, cost: Math.round(usedExp * costPerExp(grade)), bonus,
+    exp, cost: Math.floor(usedExp * costPerExp(grade) + 1e-9), bonus: Math.round(bonus * 10) / 10,
     expected: { UpgradeLevel: lv, CarExp: carExp, Attributes },
   };
 }

@@ -11,10 +11,10 @@
 //      레벨업: CarExp 가 대상 등급의 CarExp(레벨당 필요치) 이상이면 레벨 +1, 최대 maxUpgradeLevel(10)
 //      능력치 = 기존 + floor(UpgradeFactor x (새레벨-1)) - floor(UpgradeFactor x (옛레벨-1))   (TOFU 3.139: Lv1->3 각 +6)
 //      비용 = 경험치 x 대상 등급 단가 (★1 8코인, ★2 32.5코인. 실측 80/160/240, 650/1560)
-//      ChanceupBonus.CarLevelBonus = 재료당 6, SuccessChance 100, 재료 차량 삭제(RemovedCarInfo [{Carid}])
+//      ChanceupBonus.CarLevelBonus = 재료마다 등급 차·레벨 배율 (upgradecalc.ts materialBonus), SuccessChance 100, 재료 차량 삭제(RemovedCarInfo [{Carid}])
 //  - MsgUpgradeInfoReq: 같은 계산의 예상치 {Result 1, SuccessChance, ChanceupBonus, Cost, ExpectedCarInfo}
 //  - MsgSetCurrentCarReq {CarInfo:{Carid}} -> {Seq, Result 1, UserInfo}
-// 추정(실측 없음): ★3 이상 대상의 단가(★1·★2 비율 4.06 배씩 증가로 가정), 재료 차량에 장착된 부품 처리(함께 삭제),
+// 추정(실측 없음): ★6 대상의 단가(upgradecalc.ts), 재료 차량에 장착된 부품 처리(함께 삭제),
 //   최대 레벨에서 남는 경험치(버림).
 import { readFileSync, existsSync } from 'node:fs';
 import { register, type Msg } from '../rpc.js';
@@ -57,7 +57,10 @@ register('MsgUpgradeCarReq', (body, ctx): Msg[] => {
     if (low) return fail(`재료 등급 너무 낮음 (★${low.Grade} -> ★${tg})`);
     if ((Number(ui.Coin) || 0) < pv.cost) return [{ name: 'MsgUpgradeCarAns', body: { Seq: 1, Result: 3, UserInfo: ui } }];
     ui.Coin -= pv.cost;
-    Object.assign(car, pv.expected);
+    // 대성공: 확률 보너스(TotalBonus)% 로 재료 경험치의 절반을 더 받는다 (실기록 강화 127건: 기대 4.9회, 실제 4회, 4회 모두 정확히 50%) [추정]
+    const bonusExp = Math.random() * 100 < pv.bonus ? Math.floor(pv.exp / 2) : 0;
+    const res = bonusExp ? upgradePreview(snap, car, sources, bonusExp) : pv;
+    Object.assign(car, 'error' in res ? pv.expected : res.expected);
     const ids = new Set(sources.map((x: any) => Number(x.Carid)));
     snap.Cars.CarInfo = snap.Cars.CarInfo.filter((c: any) => !ids.has(Number(c.Carid)));
     const removedParts = (snap.Items?.ItemInfo ?? []).filter((it: any) => ids.has(Number(it.Equipcarid)));
@@ -68,7 +71,7 @@ register('MsgUpgradeCarReq', (body, ctx): Msg[] => {
     return [{ name: 'MsgUpgradeCarAns', body: {
       Seq: 1, Result: R_OK, UpgradeSuccess: true, ResultCarInfo: { ...car } /* CarEffect 는 원래 있는 차만 (실기록: 코인 상자 차량은 키 없음) */, UserInfo: ui,
       RemovedCarInfo: [...ids].map((Carid) => ({ Carid })), RemovedPartsInfo: removedParts.map((p: any) => ({ Itemid: p.Itemid })),
-      NormalDeltaExp: pv.exp, BonusDeltaExp: 0,
+      NormalDeltaExp: pv.exp, BonusDeltaExp: bonusExp,
       // PropertySet 은 일일 미션 값이 바뀐 때만 (실기록 2026-11-02: 그날 첫 강화에만 있음)
       ...(propChanged ? { PropertySet: snap.PropertySet } : {}),
     } }];
