@@ -93,6 +93,7 @@ const pick = (msgs, n) => msgs.find((m) => m.name === n)?.body;
 //   5) 그래도 모자라면 판매(MsgSellPartsReq {Itemid, Itemcnt}): 도색 쿠폰(608, 낮은 등급부터) -> 데이트 티켓(602, 적은 묶음부터)
 // 팔지 않음: 판매가 없음(-1·없음), 코어(61006, 한계 돌파 재료), 상자, 소녀 아이템·선물, 티켓, 데이트 쿨타임(601). 칸 확장(캐시)은 하지 않는다.
 const ITEM_WANT = 3;
+const CORE_BOX_DAY = 12, CORE_COIN_KEEP = 40000; // 주력 차량 한계 돌파용 코어 상자 (아래 core farm)
 const COINBOX_DAY = 8; // 코인 중고 차량 상자 하루 최대 (6,900 x 8 ≈ 5.5만, 코인 15만 초과분에서만)
 const TIDY_SKIP = {}; // Itemtype -> 다시 시도할 시각 (사용 거절 시)
 let ITEMT = null;
@@ -102,7 +103,7 @@ async function itemTables() {
     const { readTable } = await import(DGP.url('dist/upserts.js'));
     const t = readTable(D + 'itemTable.json', 'itemTable.json');
     ITEMT = { item: new Map(t.Item.map((i) => [i.Id, i])), store: new Map(t.StoreItem.map((s) => [s.Id, s])),
-      parts: new Set(JSON.parse(fs.readFileSync(D + 'parts.json', 'utf8')).Part.map((p) => p.Id)),
+      parts: new Set(DGP.table('parts.json').Part.map((p) => p.Id)),
       gitem: new Map(JSON.parse(fs.readFileSync(D + 'girlItemTable.json', 'utf8')).GirlItemInfo.map((g) => [g.Id, g])),
       text: (() => { try { const x = JSON.parse(fs.readFileSync(D + 'text_kr.json', 'utf8')); return x.Text ?? x; } catch { return {}; } })() };
   }
@@ -195,7 +196,7 @@ async function manage() {
   // 아이템 칸 확보 (위 tidyItems). 부품 상자를 열면 부품이 늘어나므로 부품 칸 정리보다 먼저
   try { ud = await tidyItems(ud); } catch (e) { log('item tidy error ' + e.message); }
   // 부품 칸 확보: 레이스 보상 부품이 들어갈 칸이 없으면 시작이 막힌다 (부품 화면으로 이동). 빈 칸 2개 유지, 장착 안 된 ★1 부품부터 판다
-  { const parts = JSON.parse(fs.readFileSync(DGP.srv('data/tables/parts.json'), 'utf8')).Part;
+  { const parts = DGP.table('parts.json').Part; // content.json 패치 포함 (XP 부스터 등, paths.cjs)
     const inv = (ud.Items?.ItemInfo ?? []).filter((it) => parts.some((p) => p.Id === it.Itemtype));
     // 칸 = 장착 안 된 부품 수 기준 (2026-11-04: 미장착 11 / PartsSlotNum 8 에서 이벤트 레이스가 '부품 보관함이 가득' 으로 시작 안 됨)
     //   파는 순서: ★1·★2 (낮은 등급·능력치 합 순) -> 같은 종류가 둘 이상인 ★3 의 남는 것. ★4 이상과 종류별 마지막 1개는 팔지 않는다
@@ -206,29 +207,42 @@ async function manage() {
     const low = free.filter((it) => gradeOf(it) <= 2).sort((x, y) => gradeOf(x) - gradeOf(y) || sumOf(x) - sumOf(y));
     const seen = new Set(inv.filter((it) => it.Equipcarid > 0).map((it) => it.Itemtype));
     const dup3 = free.filter((it) => gradeOf(it) === 3).sort((x, y) => sumOf(y) - sumOf(x)).filter((it) => { if (seen.has(it.Itemtype)) return true; seen.add(it.Itemtype); return false; }).sort((x, y) => sumOf(x) - sumOf(y));
-    let sell = [...low, ...dup3].slice(0, Math.max(0, over));
+    // 2026-11-14 (사용자 선택 '혼합: 차 10 부품만 강화'): ★4 70개가 쌓여 미장착 91 / 16칸 -> 화면에서 시작하는 이벤트·14-20 이
+    //   '부품 보관함이 가득' 으로 시작 안 됨 (11-08 부터 12번). 순서: ★1·★2 -> 같은 종류 ★3 -> 나머지 ★3 -> 장착 안 된 ★4 (능력치 합 낮은 순).
+    //   강화 대상은 combine-plan.json partFeed {car, cats} 의 차에 단 ★4 이상 부품 중 그 분류(cats)의 것만 (지금 차 10, 분류 3·5). 나머지는 판다. ★5 이상은 남긴다.
+    //   강화 비용은 경험치 1당 약 1코인 (실측 2026-11-08: 재료 3개 966 경험치 -> 970코인), 판매는 ★4 430·★3 200코인.
+    const catOf = (it) => parts.find((p) => p.Id === it.Itemtype)?.Category;
+    const lvOf = (it) => Number(it.ItemLevel) || 1;
+    let pf = null; try { pf = JSON.parse(fs.readFileSync(`${OUT}/combine-plan.json`, 'utf8')).partFeed ?? null; } catch {}
+    const tgtOf = new Map();
+    for (const it of inv.filter((x) => pf && Number(x.Equipcarid) === Number(pf.car) && gradeOf(x) >= 4 && gradeOf(x) < 9 && (pf.cats ?? []).map(Number).includes(Number(catOf(x)))))
+      if (lvOf(it) < (Number(parts.find((p) => p.Id === it.Itemtype)?.LevelMax) || 99)) tgtOf.set(catOf(it), it);
+    const rest3 = free.filter((it) => gradeOf(it) === 3 && !dup3.includes(it)).sort((x, y) => sumOf(x) - sumOf(y));
+    const g4 = free.filter((it) => gradeOf(it) === 4).sort((x, y) => sumOf(x) - sumOf(y));
+    let sell = [...low, ...dup3, ...rest3, ...g4].slice(0, Math.max(0, over));
     // 팔 부품은 먼저 현재 차량에 단 부품의 강화 재료로 쓴다 (2026-11-08, 게임 패배 팁 lose_tip7 "파츠를 강화하면 성능이 향상").
     //   같은 분류(Category)에 장착된 부품이 있으면 그 부품(경험치 100%), 없으면 레벨이 가장 높은 장착 부품(50%). 비용은 경험치/10 코인.
     //   실측 2026-11-08: ★4 37302 Lv1->4 에 MaxSpd·Acc 62 -> 73 (레벨당 기본의 6%). 강화가 실패하면 예전처럼 판다.
     try {
-      const catOf = (it) => parts.find((p) => p.Id === it.Itemtype)?.Category;
-      const eq = inv.filter((it) => it.Equipcarid > 0 && it.Equipcarid === ui.Currentcar && gradeOf(it) >= 4);
+      // 같은 분류 대상에만 (경험치 100%). 한 번에 재료 3개까지 (실기록은 3개까지만 Result 1 확인)
       const groups = new Map();
-      for (const m of sell) {
-        const t = eq.find((e) => catOf(e) === catOf(m)) ?? eq.slice().sort((x, y) => (Number(y.ItemLevel) || 1) - (Number(x.ItemLevel) || 1))[0];
-        if (!t) continue;
-        groups.set(t.Itemid, [...(groups.get(t.Itemid) ?? []), m]);
-      }
+      for (const m of sell) { const t = tgtOf.get(catOf(m)); if (t) groups.set(t.Itemid, [...(groups.get(t.Itemid) ?? []), m]); }
       const fed = new Set();
-      for (const [tid, ms] of groups) {
-        if (Number(ui.Coin) < 20000) break;
+      let coin = Number(ui.Coin);
+      feed: for (const [tid, all] of groups) for (let i = 0; i < all.length; i += 3) {
+        const ms = all.slice(i, i + 3);
+        if (coin < 20000) break feed;
         const a = pick(await rpc('MsgCombinePartsReq', { Itemid: tid, ConsumeParts: ms.map((x) => x.Itemid) }), 'MsgCombinePartsAns');
-        act(`feed parts ${ms.map((x) => x.Itemtype)} -> ${tid}: Result ${a?.Result} Lv ${a?.Upgraded?.PrevItemLevel}->${a?.Upgraded?.ItemLevel} exp ${a?.Upgraded?.ItemExp} attr ${JSON.stringify(a?.Upgraded?.Attributes ?? {})}`);
-        if (a?.Result === 1) ms.forEach((x) => fed.add(x.Itemid));
+        act(`feed parts ${ms.map((x) => x.Itemtype)} -> ${tid}: Result ${a?.Result} Lv ${a?.Upgraded?.PrevItemLevel}->${a?.Upgraded?.ItemLevel} exp ${a?.Upgraded?.ItemExp} coin ${coin}->${a?.UserInfo?.Coin} attr ${JSON.stringify(a?.Upgraded?.Attributes ?? {})}`);
+        if (a?.Result !== 1) break feed;
+        ms.forEach((x) => fed.add(x.Itemid)); coin = Number(a?.UserInfo?.Coin ?? coin);
       }
       sell = sell.filter((x) => !fed.has(x.Itemid));
     } catch (e) { log('feed parts err ' + e.message); }
-    if (sell.length) { const d = pick(await rpc('MsgSellPartsReq', { Itemid: sell.map((x) => x.Itemid) }), 'MsgDeleteParts'); act(`sell parts (slots) ${sell.map((x) => x.Itemtype)}: deleted ${(d?.ItemInfo ?? []).length}`); } }
+    // 판매는 10개씩 (한 번에 판 실기록은 2개까지라 나눠 보낸다). 덜 지워지면 멈춘다
+    for (let i = 0; i < sell.length; i += 10) { const ch = sell.slice(i, i + 10);
+      const d = pick(await rpc('MsgSellPartsReq', { Itemid: ch.map((x) => x.Itemid) }), 'MsgDeleteParts'); const n = (d?.ItemInfo ?? []).length;
+      act(`sell parts (slots) ${ch.map((x) => x.Itemtype)}: deleted ${n} coin ${d?.UserInfo?.Coin}`); if (n !== ch.length) break; } }
   // 퀘스트: 수락(2->3), 완료(6->7), 상점 구매형 목표(28: 코인·소셜포인트 상품) 수행
   const quests = JSON.parse(fs.readFileSync(DGP.srv('data/tables/nquests.json'), 'utf8')).Quest;
   const items = JSON.parse(fs.readFileSync(DGP.srv('data/tables/itemTable.json'), 'utf8')).StoreItem;
@@ -426,7 +440,7 @@ async function manage() {
       let keepPeevish = []; try { keepPeevish = JSON.parse(fs.readFileSync(`${OUT}/peevish-keep.json`, 'utf8')); } catch {}
       // 단, 삐침 원인 12(라이벌 동승)는 데이트로 안 풀린다 (2026-11-10 20505: 라이벌 20504 동승 15회 뒤 삐침, 19:46·20:06·20:26 데이트 3회 = 코인 11,500 써도 기분 1 그대로)
       //   -> 아래 동승자 선택에서 삐친 캐릭터를 동승자로 바꿔 푼다
-      for (const x of ud.MyGirls?.MyGirlInfo ?? []) if (x.State === 7 && Number(x.Emotion) === 1 && ![12, 14].includes(Number(x.CauseOfPeevish)) && !keepPeevish.includes(x.Girlid)) want.set(x.Girlid, { q: 'peevish', place: 0 });
+      for (const x of ud.MyGirls?.MyGirlInfo ?? []) if (x.State === 7 && Number(x.Emotion) === 1 && ![12, 14].includes(Number(x.CauseOfPeevish)) && !keepPeevish.includes(x.Girlid)) want.set(x.Girlid, { q: `peevish c${x.CauseOfPeevish}`, place: 0 });
       // run/date-priority.json {캐릭터: 남은 횟수}: 쿨타임이 끝나면 우선 데이트 (예: FM 부스트 뒤 3회면 호감도 최대, 2026-11-06 지아 20208)
       let prio = {}; try { prio = JSON.parse(fs.readFileSync(`${OUT}/date-priority.json`, 'utf8')); } catch {}
       for (const [gidS, left] of Object.entries(prio)) { const gg = Number(gidS), x = (ud.MyGirls?.MyGirlInfo ?? []).find((y) => y.Girlid === gg);
@@ -451,6 +465,9 @@ async function manage() {
       let n = 0;
       for (const [g, w] of want) {
         if (n >= 3 || !open(g)) continue;
+        // 해금·한계 돌파 데이트는 코인 1만 미만이면 쉰다 (2026-11-13: 20403 해금 데이트로 2시간에 코인 -7,400, 연료가 묶인 레이스 수입보다 큼.
+        //   강화·부품 비용과 삐침 데이트용 코인을 남긴다. 삐침·퀘스트·우선 데이트는 그대로)
+        if ((w.q === 'unlock' || w.q === 'limitbreak') && Number(ud.UserInfo?.Coin) < 10000) continue;
         const h = hist[g] ?? [], last = Number(open(g)?.LastDatePlace) || 0;
         // 특별 장소(SpecialDate, 예 고급 리조트 40016 RestrictionFamiliarity 3)는 그 호감도 단계가 되기 전에는 거절됨(Date_Special_Deny) -> 일반 장소로 호감도부터
         const sp = PL.find((x) => x.Id === w.place), gd = GIRLT.Girl.find((x) => x.Id === g), fam = Number(open(g)?.Familiarity) || 0;
@@ -466,8 +483,37 @@ async function manage() {
         const satF = (p) => { const s = satHist[g]?.[p]; return s == null ? 1 : [0.5, 0.5, 0.75, 1, 1.25, 1.5][Math.max(0, Math.min(5, Number(s)))]; };
         const okPlace = (p) => { const sc = PL.find((x) => x.Id === p)?.ScriptName; return !(sc && placeRefused(g, sc, famLv(g, fam))) && !dateFailed(g, p); };
         if (w.place && !okPlace(w.place)) w.place = 0; // a quest place she refuses at this level: pick another place
+        // 해금·한계 돌파용 호감도 데이트는 코인 대비 호감도로 고른다 (2026-11-13): 연료가 바닥나 레이스가 15초당 연료 1 속도로 묶이면 코인이 병목이고,
+        //   호감도 최대 기준은 레스토랑(20403 ★3: 3,200코인 +402)만 골라 2시간 데이트 10회에 코인 1만 8백 소모 -> ★6 계획 상자 구매가 멈춤.
+        //   비용 = Price x (1 + 0.5(Rarity-1)) 100 단위 반올림 (실기록 459건 일치). 데이트 1회의 시간 값으로 300 코인을 더한다.
+        const famV = (p) => famP(p) * (p === Number(gd?.PreferencePlaceA) ? 1.5 : 1) * satF(p) + (seen.has(p) ? 0 : Number(gd?.FirstDatePlaceBonus) || 0);
+        const rarN = Number(open(g)?.Rarity) || Number(gd?.Rarity) || 1;
+        const coinOf = (p) => Math.round((Number(PL.find((x) => x.Id === p)?.Price) || 0) * (1 + 0.5 * (rarN - 1)) / 100) * 100;
+        const perCoin = w.q === 'unlock' || w.q === 'limitbreak';
         const best = places.filter(okPlace).filter((p) => p !== last && p !== Number(gd?.DislikePlace) && (Number(PL.find((x) => x.Id === p)?.UnlockFmLevel) || 1) <= famLv(g, fam))
-          .map((p) => [p, famP(p) * (p === Number(gd?.PreferencePlaceA) ? 1.5 : 1) * satF(p) + (seen.has(p) ? 0 : Number(gd?.FirstDatePlaceBonus) || 0)]).sort((a, b) => b[1] - a[1])[0]?.[0];
+          .map((p) => [p, perCoin ? famV(p) / (coinOf(p) + 300) : famV(p)]).sort((a, b) => b[1] - a[1])[0]?.[0];
+        if (perCoin && best && !w.place) w.q = `${w.q} eff`;
+        // 삐침 풀기 데이트 장소 (2026-11-12): 삐친 캐릭터와의 데이트는 장소와 상관없이 Date_Peevish 대본(문항 없음)이고 어디서든 풀린다.
+        //   만족도는 장소마다 다르다 (실기록 삐침 데이트 26건, run/peevish-sat.json: 레스토랑 4 x6, 바 4 x2, 수족관 4, 노래방 4 x6·3 x2,
+        //   테마파크 5 x2·3, 호텔 뷔페 3, 동물원 2, 핫스폿 2). 만족도 3 이하가 연달아 2번이면 원인 1(20201 PeevishCondition1 값 2)로 다시 삐친다
+        //   (11-12: 13:17 3 -> 15:06 3 -> 원인 1 삐침 / 18:43 2 -> 19:40 4 -> 20:35 2 -> 안 삐침).
+        //   호감도가 현재 등급 최대치 이상이면 (20201 ★5 최대 10000, 지금 14609) 비싼 장소의 호감도는 당장 쓸모가 없고 비용만 크다:
+        //   20201 원인 9 '레이스만 보는 건 지겨워요' = 동승 레이스 10회마다 삐침 (실기록 3구간 모두 10회) -> 레스토랑 4800 코인이 그 사이 레이스 코인 6000 의 80%.
+        //   -> 그런 캐릭터는: 직전 데이트가 3 이하면 표본이 모두 4 이상인 장소 중 가장 싼 곳, 아니면 시험 안 한 곳·절반 이상 4 인 곳 중 가장 싼 곳.
+        if (String(w.q).startsWith('peevish') && !w.place) {
+          const gi = open(g), rar = Number(gi?.Rarity) || 0;
+          const row = (gd && rar && rar !== Number(gd.Rarity) && GIRLT.Girl.find((x) => x.Id === g * 10 + rar)) || gd || {};
+          const fmax = [1, 2, 3].reduce((a, k) => a + (Number(row[`FamiliaritySection${k}`]) || 0), 0);
+          if (fmax && fam >= fmax) {
+            const rj = (f) => { try { return JSON.parse(fs.readFileSync(`${OUT}/${f}`, 'utf8')); } catch { return {}; } };
+            const ps = rj('peevish-sat.json'), lastBad = Number(rj('date-lastsat.json')[g] ?? 4) <= 3;
+            const price = (p) => Number(PL.find((x) => x.Id === p)?.Price) || 1e9;
+            const st = (p) => { const a = ps[p] ?? []; return { n: a.length, good: a.filter((x) => x >= 4).length }; };
+            const cand = places.filter(okPlace).filter((p) => p !== last && p !== Number(gd?.DislikePlace))
+              .filter((p) => { const k = st(p); return lastBad ? k.n > 0 && k.good === k.n : k.n === 0 || k.good * 2 >= k.n; }).sort((a, b) => price(a) - price(b));
+            if (cand[0]) { w.place = cand[0]; w.q = `${w.q} ${lastBad ? 'safe' : 'cheap'} ${st(cand[0]).good}/${st(cand[0]).n}`; }
+          }
+        }
         const place = w.place || best || places.filter(okPlace).find((p) => !h.includes(p) && p !== last) || places.filter(okPlace).find((p) => p !== last) || 41011;
         const out = require('child_process').execFileSync('node', [__dirname + '/dates.cjs', String(g), String(place)], { encoding: 'utf8', timeout: 120000 });
         const line = out.trim().split('\n').pop(); act(`quest date ${w.q} ${g}@${place}: ${line.slice(0, 320)}`);
@@ -511,14 +557,18 @@ async function manage() {
     const g3 = g3all.filter((c) => grow3.has(c.Carid) && c.UpgradeLevel < 10);
     const best = ud.Cars.CarInfo.slice().sort((a, b) => carGradeOf(b) - carGradeOf(a) || b.UpgradeLevel - a.UpgradeLevel)[0];
     // 2026-11-08: ★3 육성은 그만두고 가장 높은 등급 차(주력)만 키운다 (위 isProtectedMat 설명)
-    const target = best.UpgradeLevel < 10 ? best : null;
+    // ★6 조합 계획 (2026-11-12 사용자 선택, run/combine-plan.json {upgrade:[Carid...], coinKeep, boxDay, noCoreFarm}):
+    //   ★6 = ★5 Lv10 x2 조합, 두 번째 ★5 = ★4 Lv10 x2 조합 (차 8 10604, 차 11 11004). upgrade 순서대로 Lv10 미만인 첫 차를 강화 대상으로.
+    let plan = null; try { plan = JSON.parse(fs.readFileSync(`${OUT}/combine-plan.json`, 'utf8')); } catch {}
+    const planT = (plan?.upgrade ?? []).map((id) => ud.Cars.CarInfo.find((c) => c.Carid === Number(id))).find((c) => c && Number(c.UpgradeLevel) < 10);
+    const target = planT ?? (best.UpgradeLevel < 10 ? best : null);
     // 재료 상자 (사용자 지시: 코인은 쌓아 둘 필요 없이 적정선에서): 강화 대상이 있고 재료(★1·★2)가 없고 차고가 비면
     //   소셜 포인트 차량 상자(72007, 150 SP) -> 코인 중고 차량 상자(73008, 코인 15만 초과분만). 하루 코인 상자 최대 COINBOX_DAY 개.
     const matsNow = target ? others.filter((c) => c.Carid !== target.Carid && !isProtectedMat(c, curCar) && carGradeOf(c) <= carGradeOf(target) && carGradeOf(c) >= carGradeOf(target) - 3) : [];
     if (target && !matsNow.length && ud.Cars.CarInfo.length < ud.UserInfo.GarageSize) {
       const day = new Date().toISOString().slice(0, 10), cbf = `${OUT}/coinbox.json`;
       const cb = fs.existsSync(cbf) ? JSON.parse(fs.readFileSync(cbf, 'utf8')) : {};
-      const sp = Number(ud.UserInfo.SocialPoint) >= 150, coin = Number(ud.UserInfo.Coin) - 6900 >= 150000 && (cb[day] ?? 0) < COINBOX_DAY;
+      const sp = Number(ud.UserInfo.SocialPoint) >= 150, coin = Number(ud.UserInfo.Coin) - 6900 >= (planT ? Number(plan.coinKeep) || 40000 : 150000) && (cb[day] ?? 0) < (planT ? Number(plan.boxDay) || COINBOX_DAY : COINBOX_DAY);
       if (sp || coin) {
         const id = sp ? 72007 : 73008, cash0 = Number(ud.UserInfo.Cash);
         const a = pick(await rpc('MsgBuyProductReq', { StoreItemId: id, Buycount: 1 }), 'MsgBuyProductAns');
@@ -569,12 +619,62 @@ async function manage() {
       }
     }
   } catch (e) { log('upgrade err ' + e); }
+  // 주력 차량 한계 돌파 자동화 (2026-11-11): 현재 차가 ★5 Lv10 이면 숙련도 상한을 늘리는 길은 한계 돌파(MsgMasteryExpandReq)뿐.
+  //   비용은 캐시가 아니라 차량 부품(코어 61006) ExpCash + ExpCashDiff x ExpansionLevel (실측 11705: 53, 64. 다음 75). 자연 수입은 하루 약 7개라
+  //   남는 코인으로 코인 차량 상자(73008, 6900)를 사서 나온 ★1·★2 차를 분해한다 (실기록 64상자: ★1 22·★2 38·★3 4 -> ★1·★2 만 분해하면 상자당 약 1.5개).
+  //   ★3 이상은 분해하지 않는다 (safety 가 막음, ★3 은 강화 재료로만). 코인 CORE_COIN_KEEP 이상 남길 때만, 하루 CORE_BOX_DAY 상자, 한 순환 3상자까지.
+  //   숙련도가 차고 코어가 비용 이상이면 바로 한계 돌파한다. 매 단계 캐시가 그대로인지 확인하고, 아니면 이 기능을 멈춘다 (globalThis.__noCoreFarm).
+  try {
+    let cplan = null; try { cplan = JSON.parse(fs.readFileSync(`${OUT}/combine-plan.json`, 'utf8')); } catch {}
+    // ★6 조합 계획 중에는 차 10 한계 돌파를 하지 않는다 (조합하면 한계 돌파는 사라진다: 클라이언트 car_combine_mastery_expansion_confirm)
+    if (!globalThis.__noCoreFarm && !cplan?.noCoreFarm) {
+      let u = pick(await rpc('MsgLoginReq'), 'MsgUserData');
+      const cur = u.Cars.CarInfo.find((c) => c.Carid === u.UserInfo.Currentcar);
+      const def = CARS_T.find((x) => x.Id === cur?.Cartype) ?? {};
+      const lvl = Number(cur?.ExpansionLevel) || 0;
+      if (cur && carGradeOf(cur) >= 5 && Number(cur.UpgradeLevel) >= 10 && lvl < (Number(def.ExpCount) || 0) && Number(def.ExpCash) > 0) {
+        const cost = Number(def.ExpCash) + (Number(def.ExpCashDiff) || 0) * lvl;
+        const cores = (x) => Number((x.Items?.ItemInfo ?? []).find((i) => i.Itemtype === 61006)?.Count) || 0;
+        const day = new Date().toISOString().slice(0, 10), cbf = `${OUT}/corebox.json`;
+        let cb = {}; try { cb = JSON.parse(fs.readFileSync(cbf, 'utf8')); } catch {}
+        const spare = (x) => x.Cars.CarInfo.filter((c) => c.Carid !== x.UserInfo.Currentcar && carGradeOf(c) <= 2 && !c.IsLocked && !c.IsExhibited && !(Number(c.ExpansionLevel) > 0)
+          && !(x.Items?.ItemInfo ?? []).some((i) => Number(i.Equipcarid) === c.Carid));
+        let boxes = 0;
+        while (!globalThis.__noCoreFarm && cores(u) < cost) {
+          for (const c of spare(u)) {
+            const cash0 = Number(u.UserInfo.Cash), k0 = cores(u);
+            const a = pick(await rpc('MsgDisassembleCarReq', { CarID: [c.Carid] }), 'MsgDisassembleCarAns');
+            u = pick(await rpc('MsgLoginReq'), 'MsgUserData');
+            act(`core farm: disassemble ${c.Carid} (${c.Cartype} ★${carGradeOf(c)}): Result ${a?.Result} cores ${k0} -> ${cores(u)} (need ${cost})`);
+            if (a?.Result !== 1 || Number(u.UserInfo.Cash) !== cash0) { log('core farm: disassemble refused or cash changed, stop'); globalThis.__noCoreFarm = 1; break; }
+          }
+          if (globalThis.__noCoreFarm || cores(u) >= cost || boxes >= 3) break;
+          const coin = Number(u.UserInfo.Coin) || 0;
+          if ((cb[day] ?? 0) >= CORE_BOX_DAY || coin - 6900 < CORE_COIN_KEEP || u.Cars.CarInfo.length >= Number(u.UserInfo.GarageSize)) break;
+          const cash0 = Number(u.UserInfo.Cash);
+          const b = pick(await rpc('MsgBuyProductReq', { StoreItemId: 73008, Buycount: 1 }), 'MsgBuyProductAns'); boxes++;
+          cb[day] = (cb[day] ?? 0) + 1; fs.writeFileSync(cbf, JSON.stringify(cb));
+          u = pick(await rpc('MsgLoginReq'), 'MsgUserData');
+          act(`core farm: coin box 73008 (${cb[day]} today): Result ${b?.Result} ${(b?.RewardInfo?.CarInfo ?? []).map((c) => `${c.Cartype}★${carGradeOf(c)}`).join(',')} coin ${coin} -> ${u.UserInfo.Coin} cash ${u.UserInfo.Cash}`);
+          if (b?.Result !== 1 || Number(u.UserInfo.Cash) !== cash0 || coin - Number(u.UserInfo.Coin) !== 6900) { log('core farm: unexpected box result, stop'); globalThis.__noCoreFarm = 1; break; }
+        }
+        const c2 = u.Cars.CarInfo.find((c) => c.Carid === cur.Carid);
+        if (!globalThis.__noCoreFarm && c2 && Number(c2.Mastery) >= Number(c2.MasteryCapacity) && cores(u) >= cost) {
+          const cash0 = Number(u.UserInfo.Cash), k0 = cores(u);
+          const a = pick(await rpc('MsgMasteryExpandReq', { CarInfo: { Carid: c2.Carid }, ExpansionCash: cost }), 'MsgMasteryExpandAns');
+          const u2 = pick(await rpc('MsgLoginReq'), 'MsgUserData'); const c3 = u2.Cars.CarInfo.find((c) => c.Carid === c2.Carid);
+          act(`mastery expand car ${c2.Carid} (${c2.Cartype}) step ${lvl} -> ${c3?.ExpansionLevel}, cost ${cost} cores: Result ${a?.Result} cap ${c2.MasteryCapacity} -> ${c3?.MasteryCapacity} cores ${k0} -> ${cores(u2)} cash ${cash0} -> ${u2.UserInfo.Cash}`);
+          if (a?.Result !== 1 || Number(u2.UserInfo.Cash) !== cash0) { log('core farm: unexpected expand result, stop'); globalThis.__noCoreFarm = 1; }
+        }
+      }
+    }
+  } catch (e) { log('core farm err ' + e); }
   // 현재 차량 빈 부품 칸 채우기 (2026-11-05: ★5 NSR+ 로 바꾼 뒤 칸이 비어 있었다): 장착 안 된 부품 중 능력치 합이 큰 것,
   //   그 차에 이미 단 분류(Category)는 제외 (한 차에 분류당 1개). MsgEquipPartsReq {Itemid, Equipindex, Equipcarid} -> MsgChangeParts
   try {
     const u3 = pick(await rpc('MsgLoginReq'), 'MsgUserData');
     const PT = new Map(JSON.parse(fs.readFileSync(DGP.srv('data/tables/parts.json'), 'utf8')).Part.map((p) => [p.Id, p]));
-    const carId = u3.UserInfo.Currentcar, car = u3.Cars.CarInfo.find((c) => c.Carid === carId);
+    const carId = u3.UserInfo.Currentcar, car = isPlanCar(carId) ? null : u3.Cars.CarInfo.find((c) => c.Carid === carId); // 조합 계획 차는 부품·칸 손대지 않음
     const items = (u3.Items?.ItemInfo ?? []).filter((i) => PT.has(i.Itemtype));
     const eq = items.filter((i) => i.Equipcarid === carId);
     const used = new Set(eq.map((i) => i.Equipindex)), cats = new Set(eq.map((i) => PT.get(i.Itemtype).Category));
@@ -617,7 +717,7 @@ async function manage() {
       const u4 = pick(await rpc('MsgLoginReq'), 'MsgUserData');
       fs.writeFileSync(`${OUT}/ud-partopt.json`, JSON.stringify(u4));
       const po = JSON.parse(require('child_process').execFileSync('node', [__dirname + '/partopt.mjs', `${OUT}/ud-partopt.json`, String(carId), `${OUT}/PARTOPT_W`], { encoding: 'utf8', timeout: 60000 }));
-      if (po.best && po.plan && po.best.sum >= po.current.sum + 10) {
+      if (car && po.best && po.plan && po.best.sum >= po.current.sum + 10) {
         const res = [];
         for (const st of po.plan) {
           if (st.keep) continue;
@@ -785,10 +885,14 @@ function readTrials() { try { return JSON.parse(fs.readFileSync(TRIAL_F(), 'utf8
 // 다른 동승자 후보에 쓰는 가중치 (2026-11-07 13-12: 안정 위주 [0.2,0.2,1,0.2] 가 50.18 로 가장 빨랐다)
 const TRIAL_W2 = [[0.2, 0.2, 1, 0.2], [1, 1, 1, 1]];
 // 시도 기록(능력치 -> 기록)으로 맞춘 선형 모형 (약한 ridge, 5개 이상일 때만). 다음 후보를 고르는 데만 쓴다
-function fitTimeModel(rows) {
+// 최고속 포화 (2026-11-12): 14-20 기록 12건에서 최고속은 약 1100 까지만 빨라지고 그 위는 효과가 없었다
+//   (20201 동승 최고속 1743 -> 2253 에 기록 62.09 -> 61.88, 같이 오른 다른 능력치만큼). 직선 모형은 최고속을 과대평가해
+//   20201 조합을 계속 골랐다. 8건 이상이면 최고속 상한 후보(기록된 값 50 단위)마다 한 개 빼기 검증 오차를 보고,
+//   상한 없는 모형보다 30% 이상 작으면 상한 모형을 쓴다 (14-20: 0.796 -> 0.067 초, 13-14: 0.081 -> 0.021 초, 상한 1100·750).
+function fitLin(rows, cap) {
   const K = ['AttribMaxSpd', 'AttribAcc', 'AttribStability', 'AttribDrift'];
-  rows = rows.filter((r) => r.attr && r.time > 0); if (rows.length < 5) return null;
-  const X = rows.map((r) => K.map((k) => Number(r.attr[k]) || 0)), y = rows.map((r) => r.time);
+  const val = (a, j) => (j === 0 ? Math.min(Number(a[K[0]]) || 0, cap) : Number(a[K[j]]) || 0);
+  const X = rows.map((r) => K.map((_, j) => val(r.attr, j))), y = rows.map((r) => r.time);
   const mx = K.map((_, j) => X.reduce((t, x) => t + x[j], 0) / X.length), my = y.reduce((t, v) => t + v, 0) / y.length;
   const M = K.map(() => [0, 0, 0, 0, 0]), lam = 2000;
   X.forEach((x, i) => { const d = x.map((v, j) => v - mx[j]); for (let p = 0; p < 4; p++) { M[p][4] += d[p] * (y[i] - my); for (let q = 0; q < 4; q++) M[p][q] += d[p] * d[q]; } });
@@ -796,7 +900,16 @@ function fitTimeModel(rows) {
   for (let c = 0; c < 4; c++) { let pv = c; for (let r = c + 1; r < 4; r++) if (Math.abs(M[r][c]) > Math.abs(M[pv][c])) pv = r; [M[c], M[pv]] = [M[pv], M[c]];
     for (let r = 0; r < 4; r++) if (r !== c) { const f = M[r][c] / M[c][c]; for (let k = c; k < 5; k++) M[r][k] -= f * M[c][k]; } }
   const beta = M.map((r, i) => r[4] / r[i]);
-  return { beta, f: (a) => my + K.reduce((t, k, j) => t + beta[j] * ((Number(a[k]) || 0) - mx[j]), 0) };
+  return { beta, cap, f: (a) => my + K.reduce((t, k, j) => t + beta[j] * (val(a, j) - mx[j]), 0) };
+}
+function fitTimeModel(rows) {
+  rows = rows.filter((r) => r.attr && r.time > 0); if (rows.length < 5) return null;
+  if (rows.length < 8) return fitLin(rows, Infinity);
+  const loo = (cap) => rows.reduce((s, r, i) => s + (fitLin(rows.filter((_, j) => j !== i), cap).f(r.attr) - r.time) ** 2, 0);
+  let best = { cap: Infinity, e: loo(Infinity) }; const e0 = best.e;
+  const caps = [...new Set(rows.map((r) => Math.round((Number(r.attr.AttribMaxSpd) || 0) / 50) * 50))].sort((a, b) => a - b).slice(1);
+  for (const cap of caps) { const e = loo(cap); if (e < best.e) best = { cap, e }; }
+  const m = fitLin(rows, best.e < e0 * 0.7 ? best.cap : Infinity); m.loo = [Math.sqrt(e0 / rows.length), Math.sqrt(best.e / rows.length)]; return m;
 }
 async function setupTrial(raceId) {
   const ud = pick(await rpc('MsgLoginReq'), 'MsgUserData'); const carId = ud.UserInfo.Currentcar, girl = Number(ud.UserInfo.PassengerGirl);
@@ -834,7 +947,7 @@ async function setupTrial(raceId) {
   else if (model) {
     for (const c of untried) c.pred = model.f(c.attr);
     untried.sort((x, y) => x.pred - y.pred);
-    if (untried.length && untried[0].pred <= bestT + 0.05) { pickC = untried[0]; why = `model ${pickC.pred.toFixed(3)} (beta ${model.beta.map((v) => v.toExponential(1)).join(',')})`; }
+    if (untried.length && untried[0].pred <= bestT + 0.05) { pickC = untried[0]; why = `model ${pickC.pred.toFixed(3)} (beta ${model.beta.map((v) => v.toExponential(1)).join(',')}${Number.isFinite(model.cap) ? `, MaxSpd cap ${model.cap}` : ''})`; }
   } else pickC = untried.find((c) => c.girl === girl) ?? untried[0] ?? null;
   if (!pickC) {
     // 해 볼 만한 후보가 없다: 가장 빠른 조합으로 한 번 더 달리고 6시간 쉰다 (det-loss n=3)
@@ -904,6 +1017,16 @@ function farmRace(ud) {
 //   (TOFU 는 이미 1회 돌파 -> 재시도 Result 2, ★4 Lv1·★2 Lv9 도 Result 2: Lv10·숙련도 최대가 조건으로 추정)
 const QUESTS = JSON.parse(fs.readFileSync(DGP.srv('data/tables/nquests.json'), 'utf8')).Quest;
 const TEXT_KR = (() => { try { const t = JSON.parse(fs.readFileSync(DGP.srv('data/tables/text_kr.json'), 'utf8')); return t.Text ?? t; } catch { return {}; } })();
+// ★6 조합 계획 (run/combine-plan.json {upgrade:[Carid...], noMastery?}): 계획 차량과 숙련도 단계 차량
+//   조합 조건 = 둘 다 Lv10 + (숙련도 최대 또는 한계 돌파). 숙련도는 현재 차일 때 경주 승 +2·패 +1 (실기록, offline battle.ts)
+//   -> Lv10 이고 숙련도가 덜 찼고 한계 돌파 전인 계획 차를 현재 차로 두고 쉬운 경주를 돈다.
+//   조합하면 장착 부품이 함께 사라지므로(실기록 RemovedPartID) 계획 차에는 부품을 달거나 칸을 열지 않는다.
+function combinePlan() { try { return JSON.parse(fs.readFileSync(`${OUT}/combine-plan.json`, 'utf8')); } catch { return null; } }
+function isPlanCar(id) { return (combinePlan()?.upgrade ?? []).map(Number).includes(Number(id)); }
+function masteryCar(ud) {
+  const p = combinePlan(); if (!p || p.noMastery) return null;
+  return (p.upgrade ?? []).map((id) => ud.Cars.CarInfo.find((c) => c.Carid === Number(id))).find((c) => c && Number(c.UpgradeLevel) >= 10 && Number(c.Mastery) < Number(c.MasteryCapacity) && !(Number(c.ExpansionLevel) > 0)) ?? null;
+}
 function expandQuestActive(ud) {
   for (const q of ud.NquestInfos?.NquestInfo ?? []) {
     if (q.State !== 3) continue;
@@ -1251,8 +1374,12 @@ async function finishRace(t, tp, phases) {
       fs.writeFileSync(mf, JSON.stringify(now));
     } catch (e) { log('mood err ' + e); }
     globalThis.__noResSkip = noResSkip();
+    // ★6 조합 계획 숙련도 단계 (위 masteryCar): 한계 돌파 퀘스트 모드가 아닐 때만
+    const mCar = expandQuestActive(ud) ? null : masteryCar(ud);
+    globalThis.__mCarId = mCar?.Carid ?? 0;
+    if (mCar && ud.UserInfo.Currentcar !== mCar.Carid) { await rpc('MsgSetCurrentCarReq', { CarInfo: { Carid: mCar.Carid } }); act(`current car -> ${mCar.Carid} (combine plan mastery ${mCar.Mastery}/${mCar.MasteryCapacity})`); continue; }
     // 한계 돌파 퀘스트 모드
-    if (expandQuestActive(ud)) {
+    if (mCar) { /* 숙련도 단계: 가장 센 차로 되돌리지 않는다 */ } else if (expandQuestActive(ud)) {
       const ec = expandCar(ud);
       if (ec && ec.UpgradeLevel >= 10 && ec.Mastery >= ec.MasteryCapacity) {
         const a = pick(await rpc('MsgMasteryExpandReq', { CarInfo: { Carid: ec.Carid }, ExpansionCash: 28 }), 'MsgMasteryExpandAns');
@@ -1268,8 +1395,8 @@ async function finishRace(t, tp, phases) {
     }
     const curCarNow = ud.Cars.CarInfo.find((c) => c.Carid === ud.UserInfo.Currentcar);
     const questCar = expandQuestActive(ud) && curCarNow?.Grade === 2;
-    const frontier = questCar ? null : (nextRace(ud, new Set([...Object.keys(fails).filter((k) => fails[k] >= 3).map(Number), ...noResSkip(), ...detLossSkip(), ...fondSkip(ud)])) ?? nextRace(ud, new Set([...noResSkip(), ...detLossSkip(), ...fondSkip(ud)]))); // 3패 이상 레이스는 다른 안 이긴 레이스가 있으면 뒤로 (예 8-14 연패 중 8-25 캐릭터 레이스 먼저)
-    const farm = questCar ? (eventRace() ?? easyRace(ud, curCarNow)) : farmRace(ud);
+    const frontier = (questCar || mCar) ? null : (nextRace(ud, new Set([...Object.keys(fails).filter((k) => fails[k] >= 3).map(Number), ...noResSkip(), ...detLossSkip(), ...fondSkip(ud)])) ?? nextRace(ud, new Set([...noResSkip(), ...detLossSkip(), ...fondSkip(ud)]))); // 3패 이상 레이스는 다른 안 이긴 레이스가 있으면 뒤로 (예 8-14 연패 중 8-25 캐릭터 레이스 먼저)
+    const farm = mCar ? (easyRace(ud, curCarNow) ?? farmRace(ud)) : questCar ? (eventRace() ?? easyRace(ud, curCarNow)) : farmRace(ud);
     // 앞 레이스에서 3번 이상 졌으면 파밍 4판마다 1번 도전 (60분 대기 없앰). 앞 레이스가 없으면 파밍만.
     let t = frontier;
     const evt = eventRace();
@@ -1369,6 +1496,18 @@ async function finishRace(t, tp, phases) {
       if (left > 0) t = { mode: 'worldtour', zone: 0, race: null, farm: false, left };
       else { globalThis.__wtNoFree = Date.now(); log(`world tour: no free try (LeftTry ${left}, tier ${o?.MyWorldTour?.RankTier}-${o?.MyWorldTour?.RankTierGrade})`); }
     }
+    // 삐침 원인 14 ('함께 레이스를 해서 승리'): 그 캐릭터를 태우고 이겨야 풀린다 (2026-11-11 15:34 20103 동승 4-21 승리 직후 감정 1->0).
+    //   2026-11-12: 위에서 동승자를 20103 으로 바꾼 다음 판에 성능 조합이 20505 로 되돌려 번갈아 탔고, 20103 판(14-1x)은 2시간 동안 전패 12회.
+    //   -> 원인 14 가 있으면 그 동승을 유지하고(아래 needGirl), 크게 이기던(마지막 기록이 상대보다 2.5초 이상 빠른) 본편 하나를 탄다. 4번 지면 6시간 쉼
+    const peev14 = !rideObj && p12 && Number(p12.CauseOfPeevish) === 14 && !(globalThis.__peevFail?.n >= 4 && Date.now() - globalThis.__peevFail.at < 6 * 3600e3) ? p12.Girlid : 0;
+    if (peev14 && !questCar && t && !t.mode && !t.quest) {
+      const last = new Map(); for (const x of stats.races.slice(-1500)) if (x.mode === 'story' && x.id && x.time && x.opp) last.set(x.id, x);
+      const easy = [...last.values()].filter((x) => x.win && x.opp - x.time >= 2.5).map((x) => {
+        const z = ud.RaceZones.RaceZone.find((zz) => zz.ZoneId < 1000 && !zz.Locked && zz.Race.some((r) => r.RaceId === x.id));
+        const r = z?.Race.find((rr) => rr.RaceId === x.id);
+        return z && r && r.State & 1 && POS[racePos(z.ZoneId, r.RaceIndex)] ? { zone: z.ZoneId, race: r, latest: latestZone(ud), farm: true, peev: peev14 } : null; }).filter(Boolean);
+      if (easy.length) { t = easy[Math.floor(Math.random() * easy.length)]; log(`peevish 14 fix: ride ${peev14} on easy ${t.zone}-${t.race.RaceIndex} (${easy.length} easy)`); }
+    }
     const fuelNow = fuelOf(ud.UserInfo);
     if (!t) { const busy = stats.actions.filter((a, i) => i >= nAct && !a.includes('familiarity coin')).length;
       log(`no playable race; sleeping ${busy ? '1m' : '30m'}`); await sleep(busy ? 60e3 : 1800e3); continue; }
@@ -1389,11 +1528,13 @@ async function finishRace(t, tp, phases) {
     //   월드 투어·한 번 이상 진 본편은 가장 센 차+동승자 (2026-11-05: ★5 Lv1 + 퀘스트 끝난 동승자 1799 vs ★4 + 서아 2572, 8-20 보스 연패)
     try {
       // 보스(RaceIndex 20)는 첫 도전부터 최강 조합: 6구역 이후 첫 도전 패배율 보스 1/4, 본편 3/24 (2026-11-06 집계, 9-20 은 34.30 대 34.41 신승)
-      const hard = t.mode === 'worldtour' || (!t.farm && !t.quest && !t.mode && ((fails[key] ?? 0) >= 1 || t.race?.RaceIndex === 20));
+      // ★6 숙련도 단계(차 11 등 약한 차가 현재 차)에서도 주간·대결·이벤트는 가장 센 차로 (2026-11-14: 주간 3번 트랙을 차 11 로 46.83초, 하위 79%).
+      //   레이스 뒤 숙련도 단계 코드가 다시 숙련도 차로 바꾼다. 숙련도 단계가 아니면 예전과 같다
+      const hard = t.mode === 'worldtour' || (globalThis.__mCarId && ['weekly', 'duel', 'event'].includes(t.mode)) || (!t.farm && !t.quest && !t.mode && ((fails[key] ?? 0) >= 1 || t.race?.RaceIndex === 20));
       // 어려운 경주에서는 해금용 호감도 동승(unlockGirl)보다 승리가 우선 (2026-11-05: 9-16 을 지아 동승 1770 으로 0.16초 차 3연패, 최고 조합 2606).
       //   퀘스트가 요구하는 동승(rideObj)은 그대로 지킨다
       const rideGirl = t.quest && rideObj && !questCar && !SAFE.progressSkipped(`ride:${rideObj.Id}:${rideObj.ObjId}`) ? Number(rideObj.Param[4]) : 0;
-      const needGirl = rideGirl || (hard ? 0 : (rideObj ? Number(rideObj.Param[4]) : (unlockGirl || 0)));
+      const needGirl = rideGirl || (hard ? 0 : (rideObj ? Number(rideObj.Param[4]) : (peev14 || unlockGirl || 0)));
       if (hard || !needGirl) {
         fs.writeFileSync(`${OUT}/ud-perf.json`, JSON.stringify(ud));
         const pr = JSON.parse(require('child_process').execFileSync('node', [__dirname + '/perf.mjs', `${OUT}/ud-perf.json`, '200'], { encoding: 'utf8', timeout: 60000 }));
@@ -1415,7 +1556,8 @@ async function finishRace(t, tp, phases) {
     if (t.wkRound && (r === 'win' || r === 'lose')) { const ss = Math.floor((Date.now() - Date.parse('2026-11-09T07:54:00Z')) / (7 * 86400e3)); let wm = {}; try { wm = JSON.parse(fs.readFileSync(`${OUT}/wk-master.json`, 'utf8')); } catch {} if (wm.season !== ss || !Array.isArray(wm.done)) wm = { season: ss, done: [] }; wm.done = [...new Set([...wm.done, t.wkRound])]; fs.writeFileSync(`${OUT}/wk-master.json`, JSON.stringify(wm)); log(`weekly ${t.wkRound > 10 ? 'champion' : 'master'} round ${t.wkRound % 10} done: ${stats.races[stats.races.length - 1]?.time}`); }
     if (trial && (r === 'win' || r === 'lose')) { try { setupTrialDone(key, trial, Number(stats.races[stats.races.length - 1]?.time) || 0, r === 'win'); } catch (e) { log('setup trial note err ' + e); } }
     if (r !== 'win' && r !== 'lose') SAFE.progressUndo(); // 끝나지 않은 시도는 진척 감시에서 빼기
-    if (r === 'lose' && t.farm && t.race?.RaceId && !weakPassenger(ud)) farmLoss(t.race.RaceId); // 해금용 동승 중 패배는 파밍 회피 기록에 넣지 않는다
+    if (t.peev && (r === 'win' || r === 'lose')) { globalThis.__peevFail = r === 'win' ? { n: 0 } : { n: (globalThis.__peevFail?.n ?? 0) + 1, at: Date.now() }; log(`peevish 14 fix race: ${r} (fails ${globalThis.__peevFail.n})`); }
+    if (r === 'lose' && t.farm && t.race?.RaceId && !weakPassenger(ud) && !t.peev) farmLoss(t.race.RaceId); // 해금용 동승 중 패배는 파밍 회피 기록에 넣지 않는다
     if (r === 'lose' && !t.farm) fails[key] = (fails[key] ?? 0) + 1;
     if ((r === 'win' || r === 'lose') && !t.farm && !t.mode && t.race?.RaceId && !(t.leadMap && r === 'lose')) detLossNote(t.race.RaceId, Number(stats.races[stats.races.length - 1]?.time) || 0, r === 'win');
     if (r === 'win' && !t.farm) fails[key] = 0; saveFails();

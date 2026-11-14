@@ -40,7 +40,7 @@ let OUT = '.', log = console.log;
 let lastUd = null, lastCash = null, protectCache = null, allowCombineIds = new Set();
 const anomalyAt = {};
 const CARS = new Map(JSON.parse(fs.readFileSync(T + 'cars.json', 'utf8')).Car.map((c) => [c.Id, c]));
-const PARTS = new Map(JSON.parse(fs.readFileSync(T + 'parts.json', 'utf8')).Part.map((p) => [p.Id, p]));
+const PARTS = new Map(DGP.table('parts.json').Part.map((p) => [p.Id, p])); // content.json 패치 포함 (2026-11-14 XP 부스터 38701 등)
 let STORE = null;
 async function store() {
   if (!STORE) {
@@ -80,7 +80,9 @@ function computeProtect(ud) {
   const pp = [];
   for (const it of items) {
     if (!PARTS.has(Number(it.Itemtype))) continue;
-    const why = Number(it.Equipcarid) === cur && cur > 0 ? 'on current car' : partGrade(it) >= 4 ? '★4+' : it.IsLocked ? 'locked'
+    // 2026-11-14 (사용자 선택 '혼합: 차 10 부품만 강화'): ★4 는 장착된 것만 보호. 장착 안 된 ★4 는 판매·강화 재료 허용, ★5 이상은 계속 보호.
+    //   (★4 70개가 쌓여 미장착 91 / 16칸 -> 이벤트·14-20 이 '부품 보관함이 가득' 으로 시작 안 됨, 11-08 부터 12번)
+    const why = Number(it.Equipcarid) === cur && cur > 0 ? 'on current car' : partGrade(it) >= 5 ? '★5+' : partGrade(it) === 4 && Number(it.Equipcarid) > 0 ? '★4 equipped' : it.IsLocked ? 'locked'
       : keepPart.some((m) => Number(m.Itemid) === it.Itemid) ? 'manual' : null;
     if (why) pp.push({ Itemid: it.Itemid, Itemtype: it.Itemtype, why });
   }
@@ -125,6 +127,8 @@ async function beforeSend(name, body) {
   }
   if (name === 'MsgBuyProductReq') {
     const s = (await store()).get(Number(body?.StoreItemId));
+    // 표에 없는 상품은 가격을 확인할 수 없으므로 막는다 (2026-11-12 실서버 갱신으로 새 실결제 상품 74060·79631~79634 가 생김)
+    if (!s) return block(`store item ${body?.StoreItemId} not in itemTable (price unknown)`);
     if (s && (s.PriceGoldCash !== undefined || s.PriceRealMoney !== undefined || s.PriceRealMoneyInt !== undefined || s.PriceRealMoneyJP !== undefined))
       return block(`store item ${s.Id} is Gold Cash / real money`);
     if (s && s.PriceCash !== undefined && s.PriceCoin === undefined && s.PriceSocialPoint === undefined) {
