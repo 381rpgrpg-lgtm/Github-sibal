@@ -617,6 +617,23 @@ async function manage() {
           act(`upgrade (leftover) car ${sink.Carid} with ${use.map((c) => c.Cartype)} cost ${cost}: Result ${a?.Result} -> Lv ${a?.ResultCarInfo?.UpgradeLevel}`);
         }
       }
+      // 받을 곳 없는 낮은 등급 차 정리 (2026-11-14 22:24: ★1 상자 차 9대가 쌓여 차고 12/12 -> 클라이언트 첫 출발 조건(차고 여유)에 걸려
+      //   출발 요청 자체가 안 나감). ★5 대상에 못 넣고(등급 차 3 초과) 넣을 ★3·★4 차도 없으면, 차고 여유 3칸이 될 때까지 ★1·★2 Lv1 차를 분해(코어).
+      //   예전 코어 파밍과 같은 범위(사용자 승인): ★3 이상·잠금·전시·부품 장착·한계 돌파 차는 건드리지 않고(safety 도 막음), 캐시가 바뀌면 멈춘다.
+      if (!sink && left.length && Number(u2.UserInfo.GarageSize) - u2.Cars.CarInfo.length < 3) {
+        let u3 = u2;
+        const junk = (x) => x.Cars.CarInfo.filter((c) => c.Carid !== x.UserInfo.Currentcar && carGradeOf(c) <= 2 && carGradeOf(c) < carGradeOf(target) - 3 && Number(c.UpgradeLevel) === 1
+          && !c.IsLocked && !c.IsExhibited && !(Number(c.ExpansionLevel) > 0) && !isProtected(c, cur2) && !(x.Items?.ItemInfo ?? []).some((i) => Number(i.Equipcarid) === c.Carid))
+          .sort((a, b) => carGradeOf(a) - carGradeOf(b) || a.Carid - b.Carid);
+        for (const c of junk(u3)) {
+          if (Number(u3.UserInfo.GarageSize) - u3.Cars.CarInfo.length >= 3) break;
+          const cash0 = Number(u3.UserInfo.Cash);
+          const a = pick(await rpc('MsgDisassembleCarReq', { CarID: [c.Carid] }), 'MsgDisassembleCarAns');
+          u3 = pick(await rpc('MsgLoginReq'), 'MsgUserData');
+          act(`garage tidy: disassemble ${c.Carid} (${c.Cartype} ★${carGradeOf(c)}): Result ${a?.Result} garage ${u3.Cars.CarInfo.length}/${u3.UserInfo.GarageSize}`);
+          if (a?.Result !== 1 || Number(u3.UserInfo.Cash) !== cash0) { log('garage tidy: refused or cash changed, stop'); break; }
+        }
+      }
     }
   } catch (e) { log('upgrade err ' + e); }
   // 주력 차량 한계 돌파 자동화 (2026-11-11): 현재 차가 ★5 Lv10 이면 숙련도 상한을 늘리는 길은 한계 돌파(MsgMasteryExpandReq)뿐.
@@ -1121,6 +1138,7 @@ async function openGame() {
   let hubSeen = false;
   page.on('request', (r) => { if (!r.url().endsWith('/api/rpc')) return; const pd = r.postData() || '';
     if (pd.includes('MsgSpecialMessageListReq')) hubSeen = true;
+    if (pd.includes('"MsgBattleStartReq"')) globalThis.__bsReqAt = Date.now(); // 경주 시작 요청 시각 (finishRace 의 대화 넘김 조건)
     try { reqSeen.push(JSON.parse(pd).name); if (reqSeen.length > 200) reqSeen.splice(0, 100); } catch {} });
   mark('launched');
   reqSeen.length = 0; // 이번 접속의 요청만 (허브 대기에서 로그인 시점 판단)
@@ -1289,10 +1307,16 @@ async function finishRace(t, tp, phases) {
   // 시작 전 대화 넘기기 (__raceMode 는 시작 응답에서 채워짐: 노드 클릭 뒤 시작 버튼으로 이미 요청이 나간 상태)
   //   2026-11-14: 60번(180초)으로는 14-20 보스 대본 EP14BossStart(대사 39줄, 줄마다 글자 출력 완료 + 넘김 2번)이 33번째 줄에서 끊겨
   //   11-12 16시부터 5번 연속 '시작 안 됨' (run/noresult.png 'EP14BossStart-169'). 경주가 뜨면 바로 빠지므로 한도만 150번(약 7.5분)으로.
-  let preTaps = 0;
+  //   2026-11-14 22:33: 출발(Start)이 안 먹어 시작 요청(MsgBattleStartReq)이 없는데도 150번 눌러 지도의 '다음 에피소드'(») 를 넘김 -> 에피소드 18 까지 이동.
+  //   시작 요청이 나간 뒤에만 넘기고, 30초 안에 요청이 없으면 화면을 남기고 접는다 (모든 경주 종류가 MsgBattleStartReq, 월드 투어는 카운트다운 뒤)
+  let preTaps = 0; const fr0 = Date.now();
   for (let i = 0; i < 150; i++) {
     const st = await evalJ('JSON.stringify(globalThis.__dgRace ? {s: __dgRace.raceState, c: __dgRace.countdown} : null)').then(JSON.parse).catch(() => null);
     if (st && (st.s >= 2 || st.c !== null)) break;
+    if (!((globalThis.__bsReqAt || 0) > fr0 - 20000)) {
+      if (Date.now() - fr0 > 30000) { log(`race start not requested in 30s (mode ${t.mode ?? 'story'}): no dialogue taps`); await shot('nostart'); return 'noresult'; }
+      await sleep(3000); continue;
+    }
     await page.mouse.click(1240, 672); preTaps++; await sleep(3000);
   }
   if (preTaps > 40) log(`pre-race dialogue taps ${preTaps}`);
