@@ -1287,11 +1287,15 @@ async function playRace(t) {
 async function finishRace(t, tp, phases) {
   globalThis.__resultReqAt = 0; globalThis.__dlgTaps = 0;
   // 시작 전 대화 넘기기 (__raceMode 는 시작 응답에서 채워짐: 노드 클릭 뒤 시작 버튼으로 이미 요청이 나간 상태)
-  for (let i = 0; i < 60; i++) {
+  //   2026-11-14: 60번(180초)으로는 14-20 보스 대본 EP14BossStart(대사 39줄, 줄마다 글자 출력 완료 + 넘김 2번)이 33번째 줄에서 끊겨
+  //   11-12 16시부터 5번 연속 '시작 안 됨' (run/noresult.png 'EP14BossStart-169'). 경주가 뜨면 바로 빠지므로 한도만 150번(약 7.5분)으로.
+  let preTaps = 0;
+  for (let i = 0; i < 150; i++) {
     const st = await evalJ('JSON.stringify(globalThis.__dgRace ? {s: __dgRace.raceState, c: __dgRace.countdown} : null)').then(JSON.parse).catch(() => null);
     if (st && (st.s >= 2 || st.c !== null)) break;
-    await page.mouse.click(1240, 672); await sleep(3000);
+    await page.mouse.click(1240, 672); preTaps++; await sleep(3000);
   }
+  if (preTaps > 40) log(`pre-race dialogue taps ${preTaps}`);
   // 레이스 끝까지 (최대 12분). 주행이 시작되면 엔진을 고정 간격(0.02초)으로 바로 진행한다 (화면 그리기와 무관, 기록 동일: 오프라인 검증 43.19 = 43.19)
   // 타임어택(시작 응답 RaceInfo.RaceMode 2)은 빨리감기하지 않는다: 2026-11-06 3103-30 두 번 모두 빨리감기 중 22.9초 지점에서
   //   엔진이 종료(raceState 3)로 넘어간 뒤 결과 화면·요청 없이 멈춤 (남은 제한 시간 22초, 결승 전)
